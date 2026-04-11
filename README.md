@@ -117,4 +117,4 @@ The `:app` module in this repo is a showcase — a full-bleed background image s
 
 ## License
 
-TBD
+MIT
