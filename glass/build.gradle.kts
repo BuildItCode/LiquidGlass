@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.maven.publish)
 }
 
 android {
@@ -18,6 +19,10 @@ android {
         consumerProguardFiles("consumer-rules.pro")
     }
 
+    publishing {
+        singleVariant("release")
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -33,6 +38,23 @@ android {
     }
     buildFeatures {
         compose = true
+    }
+}
+
+afterEvaluate {
+    publishing {
+        publications {
+            register<MavenPublication>("release") {
+                from(components["release"])
+
+                // Coordinates
+                groupId = "com.github.BuildItCode"
+                artifactId = "glass"
+
+                // Pulling the version from the Version Catalog
+                version = libs.versions.glass.get()
+            }
+        }
     }
 }
 
