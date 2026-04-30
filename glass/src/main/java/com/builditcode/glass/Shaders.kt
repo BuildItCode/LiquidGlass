@@ -49,7 +49,8 @@ internal val GLASS_SHADER = """
 
     half4 main(float2 fc) {
         float2 half_ext = lensSize * 0.5;
-        float cr = min(cornerRadius, min(half_ext.x, half_ext.y));
+        float min_ext = min(half_ext.x, half_ext.y);
+        float cr = min(cornerRadius, min_ext);
         float2 lp = fc - lensCenter;
         float dist = sdfRoundedRect(lp, half_ext, cr);
         if (dist > AA) return half4(0.0);
@@ -58,17 +59,18 @@ internal val GLASS_SHADER = """
         float2 sc = fc;
 
         if (refraction > 0.0 && curve > 0.0) {
-            float me = min(half_ext.x, half_ext.y);
-            float depth = clamp(-dist / (me * refraction), 0.0, 1.0);
+            float depth = clamp(-dist / (min_ext * refraction), 0.0, 1.0);
             float sf = 1.0 - depth;
             float bend = 1.0 - sqrt(1.0 - sf * sf);
-            sc = fc - bend * curve * me * n;
+            sc = fc - bend * curve * min_ext * n;
         }
 
         half4 col;
         if (dispersion > 0.0) {
-            float2 shift = dispersion * (lp / half_ext) * (lp / half_ext) * (lp / half_ext) * min(half_ext.x, half_ext.y) * 0.1;
-            col = half4(content.eval(sc - shift).r, content.eval(sc).g, content.eval(sc + shift).b, content.eval(sc).a);
+            float2 normalizedPos = lp / half_ext;
+            float2 shift = dispersion * normalizedPos * normalizedPos * normalizedPos * min_ext * 0.1;
+            half4 center = content.eval(sc);
+            col = half4(content.eval(sc - shift).r, center.g, content.eval(sc + shift).b, center.a);
         } else {
             col = content.eval(sc);
         }

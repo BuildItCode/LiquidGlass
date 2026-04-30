@@ -87,7 +87,11 @@ private fun Bitmap.safeRecycle() {
     try { if (!isRecycled) recycle() } catch (_: Exception) {}
 }
 
-private fun ImageBitmap.safeRecycle() = asAndroidBitmap().safeRecycle()
+private fun ImageBitmap.safeRecycle() {
+    val bitmap = asAndroidBitmap()
+    clearCpuBlurCacheFor(bitmap)
+    bitmap.safeRecycle()
+}
 
 // =============================================================================
 // LAYER MANAGER
@@ -403,6 +407,8 @@ sealed interface BackdropFilter {
 
         private var cachedEffect: androidx.compose.ui.graphics.RenderEffect? = null
         private var cachedBlurPx: Float = -1f
+        private var cachedFallbackBlurPx: Float = -1f
+        private var cachedFallbackEffect: androidx.compose.ui.graphics.RenderEffect? = null
         private var lastDensity = -1f
         private var lastW = -1f
         private var lastH = -1f
@@ -423,6 +429,17 @@ sealed interface BackdropFilter {
 
             cachedEffect = effect
             cachedBlurPx = blurPx
+            return effect
+        }
+
+        @RequiresApi(Build.VERSION_CODES.S)
+        internal fun getOrBuildFallbackBlurEffect(blurPx: Float): androidx.compose.ui.graphics.RenderEffect? {
+            if (blurPx <= 0f) return null
+            cachedFallbackEffect?.takeIf { cachedFallbackBlurPx == blurPx }?.let { return it }
+            val effect = RenderEffect.createBlurEffect(blurPx, blurPx, Shader.TileMode.CLAMP)
+                .asComposeRenderEffect()
+            cachedFallbackEffect = effect
+            cachedFallbackBlurPx = blurPx
             return effect
         }
 
@@ -542,6 +559,7 @@ class BackdropState internal constructor(
         if (existing != null && existing.rect == rect) return
 
         val isNew = existing == null
+        existing?.result?.fallbackBitmap?.safeRecycle()
         regions[id] = Region(rect)
 
         // Attempt a synchronous crop if we already have a master image.
@@ -555,7 +573,7 @@ class BackdropState internal constructor(
     }
 
     internal fun unregisterRegion(id: Int) {
-        regions.remove(id)
+        regions.remove(id)?.result?.fallbackBitmap?.safeRecycle()
     }
 
     internal fun updateSourceRect(rect: Rect) {
@@ -567,7 +585,11 @@ class BackdropState internal constructor(
     internal fun dispose() {
         processingJob?.cancel()
         scheduledJob?.cancel()
+        regions.values.forEach { it.result?.fallbackBitmap?.safeRecycle() }
         regions.clear()
+        reusableBitmap?.safeRecycle()
+        reusableBitmap = null
+        masterImage?.safeRecycle()
         masterImage = null
     }
 
@@ -679,10 +701,7 @@ internal fun ContentDrawScope.drawBackdropGlass(
         layer.renderEffect = glass.getOrBuildRenderEffect(blurPx)
         drawLayer(layer)
     } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        if (blurPx > 0f) {
-            layer.renderEffect = RenderEffect.createBlurEffect(blurPx, blurPx, Shader.TileMode.CLAMP)
-                .asComposeRenderEffect()
-        }
+        glass.getOrBuildFallbackBlurEffect(blurPx)?.let { layer.renderEffect = it }
         drawLayer(layer)
         drawRect(glass.tint)
     } else {
@@ -723,10 +742,19 @@ private fun cpuBlur(source: Bitmap, radius: Int): Bitmap {
         cachedBlurResult?.let { if (!it.isRecycled) return it }
     }
     val blurred = applyStackBlur(source.copy(Bitmap.Config.ARGB_8888, true), radius)
+    cachedBlurResult?.safeRecycle()
     cachedBlurSource = source
     cachedBlurRadius = radius
     cachedBlurResult = blurred
     return blurred
+}
+
+private fun clearCpuBlurCacheFor(source: Bitmap) {
+    if (cachedBlurSource !== source) return
+    cachedBlurResult?.safeRecycle()
+    cachedBlurSource = null
+    cachedBlurRadius = 0
+    cachedBlurResult = null
 }
 
 // =============================================================================
