@@ -25,11 +25,12 @@ fun TriLevelLayout(
     modifier: Modifier = Modifier,
     scaleFactor: Float = 0.6f,
     debounceMs: Long = 32L,
+    manager: BackdropLayerManager? = null,
     background: @Composable () -> Unit,
     foreground: @Composable () -> Unit,
     overlay: @Composable () -> Unit
 ) {
-    val manager = rememberBackdropManager(scaleFactor, defaultDebounceMs = debounceMs)
+    val manager = manager ?: rememberBackdropManager(scaleFactor, defaultDebounceMs = debounceMs)
 
     CompositionLocalProvider(
         LocalBackdropLayerManager provides manager

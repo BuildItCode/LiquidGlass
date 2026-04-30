@@ -9,8 +9,6 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -32,16 +30,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil3.compose.AsyncImage
+import coil3.compose.AsyncImagePainter
+import coil3.request.ImageRequest
+import coil3.request.allowHardware
 import com.builditcode.glass.BackdropFilter
 import com.builditcode.glass.TriLevelLayout
 import com.builditcode.glass.glassBorder
 import com.builditcode.glass.layeredBackdropCapture
+import com.builditcode.glass.rememberBackdropManager
 import com.builditcode.liquidglass.ui.theme.LiquidGlassTheme
 import kotlin.math.PI
-import kotlin.math.cos
 import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
@@ -50,11 +52,17 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             LiquidGlassTheme {
+                val manager = rememberBackdropManager(0.8f, defaultDebounceMs = 32)
                 TriLevelLayout(
                     modifier = Modifier.fillMaxSize(),
                     scaleFactor = 0.8f,
                     debounceMs = 32L,
-                    background = { Backdrop() },
+                    manager = manager,
+                    background = { Backdrop(
+                        onLoadSuccess = {
+                            manager.invalidate("background")
+                        }
+                    ) },
                     foreground = { GlassForeground() },
                     overlay = { GlassOverlay() }
                 )
@@ -68,15 +76,25 @@ class MainActivity : ComponentActivity() {
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun Backdrop() {
-    Image(
-        painter = painterResource(id = R.drawable.img_test),
+private fun Backdrop(
+    onLoadSuccess: () -> Unit
+) {
+    AsyncImage(
+        model = ImageRequest.Builder(LocalContext.current)
+            .data("https://images.unsplash.com/photo-1775315791610-f6ceaa2f3a6b?q=80&w=3087&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D")
+            .allowHardware(true)
+            .build(),
         contentDescription = null,
         contentScale = ContentScale.Crop,
         alpha = 1f,
         modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black)
+            .fillMaxSize(),
+        onState = { state ->
+            when(state) {
+                is AsyncImagePainter.State.Success -> onLoadSuccess()
+                else -> {}
+            }
+        }
     )
 }
 

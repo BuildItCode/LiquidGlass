@@ -2,7 +2,8 @@
  * Layered Backdrop Blur / Glass Effect System for Jetpack Compose.
  *
  * Architecture:
- * - Source content is recorded into an Android Picture, then rasterized at a reduced scale.
+ * - Source content uses a fast Picture capture path, then promotes to GraphicsLayer snapshots
+ *   when a layer contains hardware-backed content.
  * - ALL modifiers are implemented as Modifier.Node to eliminate recomposition overhead.
  * - API 33+: AGSL RuntimeShader glass effect with refraction, dispersion, rim lighting.
  * - API 31+: Hardware-accelerated RenderEffect Gaussian blur.
@@ -46,6 +47,7 @@ import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.draw
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
@@ -201,6 +203,7 @@ private class BackdropSourceNode(
 
     private var cachedState: BackdropState? = null
     private val picture = Picture()
+    private var hardwareCaptureLayer: GraphicsLayer? = null
 
     fun updateLayerName(newName: String) {
         if (layerName != newName) { layerName = newName; cachedState = null }
@@ -212,13 +215,19 @@ private class BackdropSourceNode(
         state?.updateSourceRect(Rect(coordinates.positionInRoot(), coordinates.size.toSize()))
     }
 
+    override fun onDetach() {
+        hardwareCaptureLayer?.let { requireGraphicsContext().releaseGraphicsLayer(it) }
+        hardwareCaptureLayer = null
+        cachedState = null
+    }
+
     override fun ContentDrawScope.draw() {
         val state = cachedState
 
-        // Always draw content to screen first — never skip a frame
-        drawContent()
-
-        if (state == null) return
+        if (state == null) {
+            drawContent()
+            return
+        }
 
         // Read snapshot state to bind invalidation to the draw phase
         state.sourceInvalidator
@@ -228,16 +237,39 @@ private class BackdropSourceNode(
 
         if (w > 0 && h > 0 && state.shouldCapture) {
             try {
-                val canvas = picture.beginRecording(w, h)
-                val outerScope = this
-                draw(outerScope, layoutDirection, Canvas(canvas), size) {
-                    outerScope.drawContent()
+                if (state.shouldUseHardwareSnapshot) {
+                    val layer = hardwareCaptureLayer ?: requireGraphicsContext()
+                        .createGraphicsLayer()
+                        .also { hardwareCaptureLayer = it }
+                    val captureSize = state.scaledSize(w, h)
+                    val outerScope = this
+
+                    drawContent()
+                    layer.record(size = captureSize) {
+                        scale(
+                            scaleX = state.captureScaleFactor,
+                            scaleY = state.captureScaleFactor,
+                            pivot = Offset.Zero
+                        ) {
+                            outerScope.drawContent()
+                        }
+                    }
+                    state.onHardwareLayerRecorded(layer, captureSize)
+                } else {
+                    drawContent()
+                    val canvas = picture.beginRecording(w, h)
+                    val outerScope = this
+                    draw(outerScope, layoutDirection, Canvas(canvas), size) {
+                        outerScope.drawContent()
+                    }
+                    picture.endRecording()
+                    state.onPictureRecorded(picture, w, h)
                 }
-                picture.endRecording()
-                state.onPictureRecorded(picture, w, h)
             } catch (e: Exception) {
-                Log.e("BackdropSource", "Failed to record picture", e)
+                Log.e("BackdropSource", "Failed to capture backdrop source", e)
             }
+        } else {
+            drawContent()
         }
     }
 
@@ -511,7 +543,6 @@ class BackdropState internal constructor(
         private set
 
     private var masterImage: ImageBitmap? = null
-
     private var reusableBitmap: Bitmap? = null
 
     private var masterSourceRect: Rect = Rect.Zero
@@ -519,6 +550,7 @@ class BackdropState internal constructor(
     private var masterScaledH: Int = 0
 
     private var sourceRect: Rect = Rect.Zero
+    private var useHardwareSnapshot = false
     private var lastCaptureTime = 0L
     private var captureRequested = false
 
@@ -530,6 +562,18 @@ class BackdropState internal constructor(
 
     private val hasMasterImage: Boolean
         get() = masterImage != null
+
+    internal val shouldUseHardwareSnapshot: Boolean
+        get() = useHardwareSnapshot
+
+    internal val captureScaleFactor: Float
+        get() = scaleFactor
+
+    internal fun scaledSize(width: Int, height: Int): IntSize =
+        IntSize(
+            (width * scaleFactor).roundToInt().coerceAtLeast(1),
+            (height * scaleFactor).roundToInt().coerceAtLeast(1)
+        )
 
     fun requestCaptureIfMissing() {
         // Only request a recapture if we don't have a master image AND
@@ -601,8 +645,15 @@ class BackdropState internal constructor(
         val scaledH = (height * scaleFactor).roundToInt().coerceAtLeast(1)
         val currentSource = sourceRect
 
-        val recyclable = reusableBitmap?.takeIf { !it.isRecycled && it.width == scaledW && it.height == scaledH }
-        if (recyclable != null) reusableBitmap = null
+        val recyclable = reusableBitmap?.takeIf {
+            !it.isRecycled && it.width == scaledW && it.height == scaledH
+        }
+        if (recyclable != null) {
+            reusableBitmap = null
+        } else {
+            reusableBitmap?.safeRecycle()
+            reusableBitmap = null
+        }
 
         processingJob?.cancel()
         processingJob = scope.launch(Dispatchers.Default) {
@@ -617,31 +668,99 @@ class BackdropState internal constructor(
                 val masterImg = master.asImageBitmap()
 
                 withContext(Dispatchers.Main) {
-                    val oldMaster = this@BackdropState.masterImage
-                    this@BackdropState.masterImage = masterImg
-                    this@BackdropState.masterSourceRect = currentSource
-                    this@BackdropState.masterScaledW = scaledW
-                    this@BackdropState.masterScaledH = scaledH
-
-                    regions.forEach { (id, region) ->
-                        val result = cropForRegion(region.rect, currentSource, masterImg, scaledW, scaledH)
-                        region.result?.fallbackBitmap?.safeRecycle()
-                        regions[id] = region.copy(result = result)
-                    }
-
-                    reusableBitmap = oldMaster?.asAndroidBitmap()?.takeIf { !it.isRecycled }
-                    processingJob = null
-
-                    if (captureRequested) invalidateOrSchedule()
+                    applyMasterImage(masterImg, currentSource, scaledW, scaledH, reuseOldMaster = true)
                 }
             } catch (e: CancellationException) {
-                master.safeRecycle(); throw e
+                master.safeRecycle()
+                throw e
             } catch (e: Exception) {
                 master.safeRecycle()
-                Log.w("BackdropState", "Processing failed (${scaledW}x${scaledH})", e)
+                withContext(Dispatchers.Main) {
+                    processingJob = null
+                    if (isHardwareBitmapSoftwareFailure(e)) {
+                        useHardwareSnapshot = true
+                        requestCapture()
+                    } else {
+                        Log.w("BackdropState", "Processing failed (${scaledW}x${scaledH})", e)
+                    }
+                }
             }
         }
     }
+
+    internal fun onHardwareLayerRecorded(layer: GraphicsLayer, captureSize: IntSize) {
+        captureRequested = false
+        lastCaptureTime = System.currentTimeMillis()
+
+        val scaledW = captureSize.width
+        val scaledH = captureSize.height
+        val currentSource = sourceRect
+
+        processingJob?.cancel()
+        processingJob = scope.launch(Dispatchers.Main) {
+            var snapshot: ImageBitmap? = null
+            try {
+                snapshot = layer.toImageBitmap()
+                if (!isActive) {
+                    snapshot.safeRecycle()
+                    snapshot = null
+                    return@launch
+                }
+                applyMasterImage(snapshot, currentSource, scaledW, scaledH, reuseOldMaster = false)
+                snapshot = null
+            } catch (e: CancellationException) {
+                snapshot?.safeRecycle()
+                throw e
+            } catch (e: Exception) {
+                snapshot?.safeRecycle()
+                processingJob = null
+                requestCapture()
+                Log.w("BackdropState", "Hardware layer capture failed (${scaledW}x${scaledH})", e)
+            }
+        }
+    }
+
+    private fun applyMasterImage(
+        masterImg: ImageBitmap,
+        currentSource: Rect,
+        scaledW: Int,
+        scaledH: Int,
+        reuseOldMaster: Boolean
+    ) {
+        val oldMaster = masterImage
+        masterImage = masterImg
+        masterSourceRect = currentSource
+        masterScaledW = scaledW
+        masterScaledH = scaledH
+
+        regions.forEach { (id, region) ->
+            val result = cropForRegion(region.rect, currentSource, masterImg, scaledW, scaledH)
+            region.result?.fallbackBitmap?.safeRecycle()
+            regions[id] = region.copy(result = result)
+        }
+
+        recycleOrReuseOldMaster(oldMaster, reuseOldMaster)
+        processingJob = null
+
+        if (captureRequested) invalidateOrSchedule()
+    }
+
+    private fun recycleOrReuseOldMaster(oldMaster: ImageBitmap?, reuseOldMaster: Boolean) {
+        if (!reuseOldMaster || oldMaster == null) {
+            oldMaster?.safeRecycle()
+            return
+        }
+
+        val bitmap = oldMaster.asAndroidBitmap()
+        if (!bitmap.isRecycled && bitmap.isMutable) {
+            clearCpuBlurCacheFor(bitmap)
+            reusableBitmap?.takeIf { it !== bitmap }?.safeRecycle()
+            reusableBitmap = bitmap
+        } else {
+            oldMaster.safeRecycle()
+        }
+    }
+
     private fun debounced(): Boolean =
         (System.currentTimeMillis() - lastCaptureTime) >= debounceMs
 
@@ -760,6 +879,12 @@ private fun clearCpuBlurCacheFor(source: Bitmap) {
 // =============================================================================
 // HELPERS
 // =============================================================================
+
+private fun isHardwareBitmapSoftwareFailure(error: Throwable): Boolean {
+    if (error !is IllegalArgumentException) return false
+    val message = error.message?.lowercase() ?: return false
+    return "software rendering" in message && "hardware" in message
+}
 
 private fun Rect.scale(factor: Float): Rect =
     Rect(left * factor, top * factor, right * factor, bottom * factor)

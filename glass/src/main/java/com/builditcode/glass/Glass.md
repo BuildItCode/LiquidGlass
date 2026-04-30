@@ -6,10 +6,10 @@ Part of the Lucid design system. A Jetpack Compose toolkit for real-time frosted
 
 The system has two sides:
 
-- **Source** — a `Modifier.Node` that records its drawn content into an `android.graphics.Picture`, then rasterizes it to a downscaled bitmap on a background dispatcher.
+- **Source** — a `Modifier.Node` that starts with a fast downscaled `Picture` capture and automatically promotes that layer to a `GraphicsLayer` snapshot if the source contains Compose-rendered hardware bitmaps.
 - **Capture** — a `Modifier.Node` that crops that bitmap to its on-screen region and applies a blur or glass `RenderEffect` through a `GraphicsLayer`.
 
-Both modifiers are implemented as `Modifier.Node` (no recomposition overhead). Recapture is driven implicitly by the draw phase: any time a source's `draw()` is re-invoked (e.g. its child content scrolls or animates), the source records a fresh `Picture` and the manager schedules a debounced rasterization.
+Both modifiers are implemented as `Modifier.Node` (no recomposition overhead). Recapture is driven implicitly by the draw phase: any time a source's `draw()` is re-invoked (e.g. its child content scrolls or animates), the source queues a fresh capture after the manager's debounce interval.
 
 Multiple named layers can coexist. A glass card can sample a `"Background"` layer (the scrolling content behind it) and a `"Combined"` layer (the full screen including other glass cards), enabling layered glass-on-glass effects.
 
@@ -46,7 +46,7 @@ Box(
 }
 ```
 
-Recapture is driven by Compose's draw phase: any redraw of the source subtree (a scrolling `LazyColumn`, an animating child, a state change) re-runs the source's `draw()`, which records a new `Picture`. The manager then debounces and rasterizes it on a background dispatcher. You don't need to pass `LazyListState` or any explicit triggers — if the pixels under the source change, a recapture is queued.
+Recapture is driven by Compose's draw phase: any redraw of the source subtree (a scrolling `LazyColumn`, an animating child, a state change) re-runs the source's `draw()`, which queues a new downscaled capture after the manager's debounce interval. You don't need to pass `LazyListState` or any explicit triggers — if the pixels under the source change, a recapture is queued.
 
 ### 3. Add glass panels
 
@@ -91,7 +91,7 @@ fun rememberBackdropManager(
 fun Modifier.layeredBackdropSource(layerName: String): Modifier
 ```
 
-Marks this composable as the pixel source for the named layer. The node intercepts `ContentDrawScope.draw()`, draws content to screen normally, and then — if the manager has pending capture requests — records the same draw into an `android.graphics.Picture` for off-thread rasterization.
+Marks this composable as the pixel source for the named layer. The node intercepts `ContentDrawScope.draw()`, draws content to screen normally, and then — if the manager has pending capture requests — records the same draw into a downscaled snapshot. The source starts on the lower-overhead software path and automatically promotes itself to the hardware-capable `GraphicsLayer` snapshot path if Android reports that the content cannot be drawn into a software canvas.
 
 The on-screen draw always runs first, so a slow or skipped capture never drops a frame of normal rendering.
 
@@ -296,7 +296,7 @@ manager.stopUpdates()
 manager.startUpdates()  // resumes captures and triggers a one-shot refresh
 ```
 
-While `shouldUpdate` is `false`, the source nodes short-circuit their `Picture` recording and `BackdropState.requestCapture` is a no-op. Capture nodes keep reading the most recent `CaptureResult`, so existing glass surfaces stay visually correct against the frozen snapshot.
+While `shouldUpdate` is `false`, the source nodes short-circuit snapshot recording and `BackdropState.requestCapture` is a no-op. Capture nodes keep reading the most recent `CaptureResult`, so existing glass surfaces stay visually correct against the frozen snapshot.
 
 ---
 
@@ -304,7 +304,7 @@ While `shouldUpdate` is `false`, the source nodes short-circuit their `Picture` 
 
 - **Scale factor**: The single biggest lever. `0.4f` (default) gives a good blur with ~6× fewer pixels to process than full resolution. Drop to `0.3f` for more aggressive savings on heavy scenes.
 - **Debounce**: `32ms` is the manager default (~30 fps). Drop to `16ms` for 60 fps recapture if the background animates continuously, or raise it if the background changes rarely.
-- **Bitmap reuse**: `BackdropState` keeps the previous master `Bitmap` and reuses it on the next capture if the dimensions match — avoiding per-frame allocation in the `Bitmap` pool.
+- **Adaptive capture**: Software-renderable layers stay on the lower-overhead `Picture` path with bitmap reuse. Layers that contain Compose-rendered hardware bitmaps promote once to the `GraphicsLayer` snapshot path, without a caller-provided flag.
 - **Shader compilation**: `BackdropFilter.Glass` compiles its AGSL shader lazily on first draw and caches it on the instance, so allocating a new `Glass()` per recomposition is cheap.
 - **`autoInvalidateOnMove`**: When a glass capture node moves on screen, it invalidates *other* layers (excluding its own) so layered glass-on-glass stays in sync during drag. Disable it if you have many capture nodes that move independently and you don't need layered effects to track them.
 - **Overscroll**: Disable the stretch/glow overscroll effect when using glass over a `LazyColumn` to avoid visual artifacts: wrap the list in `CompositionLocalProvider(LocalOverscrollFactory provides null)`.
