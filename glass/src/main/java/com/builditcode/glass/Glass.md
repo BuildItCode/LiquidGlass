@@ -181,7 +181,7 @@ BackdropFilter.Glass(
 )
 ```
 
-**API compatibility:** Full AGSL shader on API 33+ (Tiramisu). API 31–32 falls back to hardware `RenderEffect` blur over the captured bitmap. API 24–30 uses the CPU Stack Blur fallback.
+**API compatibility:** Full AGSL shader on API 34+. API 31–33 uses a CPU glass fallback for refraction, dispersion, saturation/contrast, and rim lighting. API 24–30 uses the CPU Stack Blur fallback.
 
 > `cornerRadiusDp` should match the `dp` value used in the `shape` passed to `layeredBackdropCapture` for physically accurate edge refraction. The shader compiles lazily on first draw and is cached on the `Glass` instance, so allocating a new `Glass()` per recomposition is cheap.
 
@@ -308,6 +308,7 @@ While `shouldUpdate` is `false`, the source nodes short-circuit snapshot recordi
 - **Debounce**: `32ms` is the manager default (~30 fps). Drop to `16ms` for 60 fps recapture if the background animates continuously, or raise it if the background changes rarely.
 - **Adaptive capture**: Software-renderable layers stay on the lower-overhead `Picture` path with bitmap reuse. Layers that contain hardware-backed content promote once to the `GraphicsLayer` snapshot path, without a caller-provided flag.
 - **Hardware snapshots**: The hardware path is meant for Compose-rendered hardware content such as hardware bitmaps. Keep the source subtree scoped to the pixels that glass panels actually need; capturing an entire launcher page at high scale during continuous animation is still real work.
+- **API 31-33 Glass fallback**: `BackdropFilter.Glass` uses a cached CPU fallback for the non-blur glass terms on API 31-33 because the AGSL runtime shader path is reserved for API 34+. Plain `BackdropFilter.Blur` still uses hardware `RenderEffect` on API 31+.
 - **Shader compilation**: `BackdropFilter.Glass` compiles its AGSL shader lazily on first draw and caches it on the instance, so allocating a new `Glass()` per recomposition is cheap.
 - **`autoInvalidateOnMove`**: When a glass capture node moves on screen, it invalidates *other* layers (excluding its own) so layered glass-on-glass stays in sync during drag. Disable it if you have many capture nodes that move independently and you don't need layered effects to track them.
 - **Overscroll**: Disable the stretch/glow overscroll effect when using glass over a `LazyColumn` to avoid visual artifacts: wrap the list in `CompositionLocalProvider(LocalOverscrollFactory provides null)`.

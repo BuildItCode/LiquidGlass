@@ -306,7 +306,7 @@ private fun VerificationGlassCard(
             .layeredBackdropCapture(
                 layerName = "background",
                 shape = shape,
-                filter = BackdropFilter.Glass(blurRadiusIntensity = 8f)
+                filter = BackdropFilter.Glass(blurRadiusIntensity = 2f)
             )
             .glassBorder(
                 shape = shape,

@@ -3,6 +3,9 @@ package com.builditcode.glass
 import android.graphics.Bitmap
 import org.intellij.lang.annotations.Language
 import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sqrt
 
 
 // =============================================================================
@@ -253,3 +256,178 @@ internal fun applyStackBlur(bitmap: Bitmap, radius: Int): Bitmap {
     bitmap.setPixels(pixels, 0, w, 0, 0, w, h)
     return bitmap
 }
+
+internal fun applyCpuGlassFallback(
+    bitmap: Bitmap,
+    cornerRadiusPx: Float,
+    refraction: Float,
+    curve: Float,
+    dispersion: Float,
+    saturation: Float,
+    contrast: Float,
+    edge: Float,
+    tintRed: Float,
+    tintGreen: Float,
+    tintBlue: Float,
+    tintAlpha: Float
+): Bitmap {
+    val w = bitmap.width
+    val h = bitmap.height
+    if (w <= 1 || h <= 1) return bitmap
+
+    val source = IntArray(w * h)
+    val output = IntArray(w * h)
+    bitmap.getPixels(source, 0, w, 0, 0, w, h)
+
+    val halfW = w * 0.5f
+    val halfH = h * 0.5f
+    val minExt = min(halfW, halfH).coerceAtLeast(1f)
+    val radius = cornerRadiusPx.coerceIn(0f, minExt)
+    val aa = 1.5f
+    val invSqrt2 = 0.70710677f
+
+    var y = 0
+    while (y < h) {
+        var x = 0
+        while (x < w) {
+            val idx = y * w + x
+            val fcX = x + 0.5f
+            val fcY = y + 0.5f
+            val lpX = fcX - halfW
+            val lpY = fcY - halfH
+            val dist = cpuRoundedRectDistance(lpX, lpY, halfW, halfH, radius)
+
+            if (dist > aa) {
+                output[idx] = 0
+                x++
+                continue
+            }
+
+            val normal = cpuGlassNormal(lpX, lpY, halfW, halfH, radius)
+            var sampleX = fcX
+            var sampleY = fcY
+
+            if (refraction > 0f && curve > 0f) {
+                val depth = (-dist / (minExt * refraction)).coerceIn(0f, 1f)
+                val surface = 1f - depth
+                val bend = 1f - sqrt((1f - surface * surface).coerceAtLeast(0f))
+                sampleX = fcX - bend * curve * minExt * normal.x
+                sampleY = fcY - bend * curve * minExt * normal.y
+            }
+
+            val centerR = cpuSampleChannel(source, w, h, sampleX, sampleY, 0)
+            val centerG = cpuSampleChannel(source, w, h, sampleX, sampleY, 1)
+            val centerB = cpuSampleChannel(source, w, h, sampleX, sampleY, 2)
+            var alpha = cpuSampleChannel(source, w, h, sampleX, sampleY, 3)
+
+            var red = centerR
+            var green = centerG
+            var blue = centerB
+
+            if (dispersion > 0f) {
+                val normX = lpX / halfW
+                val normY = lpY / halfH
+                val shiftX = dispersion * normX * normX * normX * minExt * 0.1f
+                val shiftY = dispersion * normY * normY * normY * minExt * 0.1f
+                red = cpuSampleChannel(source, w, h, sampleX - shiftX, sampleY - shiftY, 0)
+                blue = cpuSampleChannel(source, w, h, sampleX + shiftX, sampleY + shiftY, 2)
+            }
+
+            val luminance = red * 0.2126f + green * 0.7152f + blue * 0.0722f
+            red = ((luminance + (red - luminance) * saturation) - 0.5f) * contrast + 0.5f
+            green = ((luminance + (green - luminance) * saturation) - 0.5f) * contrast + 0.5f
+            blue = ((luminance + (blue - luminance) * saturation) - 0.5f) * contrast + 0.5f
+
+            if (tintAlpha > 0f) {
+                red = red * (1f - tintAlpha) + tintRed * tintAlpha
+                green = green * (1f - tintAlpha) + tintGreen * tintAlpha
+                blue = blue * (1f - tintAlpha) + tintBlue * tintAlpha
+            }
+
+            if (edge > 0f) {
+                val rim = cpuSmoothStep(-edge * 10f, 0f, dist)
+                val light = abs(normal.x * -invSqrt2 + normal.y * -invSqrt2)
+                val highlight = rim * light * edge
+                red += highlight
+                green += highlight
+                blue += highlight
+            }
+
+            val mask = 1f - cpuSmoothStep(-aa * 0.5f, aa * 0.5f, dist)
+            alpha *= mask
+
+            output[idx] = (cpuPackChannel(alpha) shl 24) or
+                    (cpuPackChannel(red) shl 16) or
+                    (cpuPackChannel(green) shl 8) or
+                    cpuPackChannel(blue)
+
+            x++
+        }
+        y++
+    }
+
+    bitmap.setPixels(output, 0, w, 0, 0, w, h)
+    return bitmap
+}
+
+private data class CpuNormal(val x: Float, val y: Float)
+
+private fun cpuRoundedRectDistance(px: Float, py: Float, halfW: Float, halfH: Float, radius: Float): Float {
+    val dx = abs(px) - halfW + radius
+    val dy = abs(py) - halfH + radius
+    val outsideX = max(dx, 0f)
+    val outsideY = max(dy, 0f)
+    return sqrt(outsideX * outsideX + outsideY * outsideY) + min(max(dx, dy), 0f) - radius
+}
+
+private fun cpuGlassNormal(px: Float, py: Float, halfW: Float, halfH: Float, radius: Float): CpuNormal {
+    val dx = abs(px) - halfW + radius
+    val dy = abs(py) - halfH + radius
+    val sx = if (px >= 0f) 1f else -1f
+    val sy = if (py >= 0f) 1f else -1f
+
+    if (max(dx, dy) > 0f) {
+        val nx = max(dx, 0f)
+        val ny = max(dy, 0f)
+        val len = sqrt(nx * nx + ny * ny)
+        if (len > 0.0001f) return CpuNormal(sx * nx / len, sy * ny / len)
+    }
+
+    return if (dx > dy) CpuNormal(sx, 0f) else CpuNormal(0f, sy)
+}
+
+private fun cpuSampleChannel(pixels: IntArray, w: Int, h: Int, x: Float, y: Float, channel: Int): Float {
+    val cx = x.coerceIn(0f, (w - 1).toFloat())
+    val cy = y.coerceIn(0f, (h - 1).toFloat())
+    val x0 = cx.toInt()
+    val y0 = cy.toInt()
+    val x1 = (x0 + 1).coerceAtMost(w - 1)
+    val y1 = (y0 + 1).coerceAtMost(h - 1)
+    val tx = cx - x0
+    val ty = cy - y0
+
+    val c00 = cpuChannel(pixels[y0 * w + x0], channel)
+    val c10 = cpuChannel(pixels[y0 * w + x1], channel)
+    val c01 = cpuChannel(pixels[y1 * w + x0], channel)
+    val c11 = cpuChannel(pixels[y1 * w + x1], channel)
+
+    val top = c00 + (c10 - c00) * tx
+    val bottom = c01 + (c11 - c01) * tx
+    return (top + (bottom - top) * ty) / 255f
+}
+
+private fun cpuChannel(color: Int, channel: Int): Float =
+    when (channel) {
+        0 -> ((color ushr 16) and 0xff).toFloat()
+        1 -> ((color ushr 8) and 0xff).toFloat()
+        2 -> (color and 0xff).toFloat()
+        else -> (color ushr 24).toFloat()
+    }
+
+private fun cpuSmoothStep(edge0: Float, edge1: Float, x: Float): Float {
+    val t = ((x - edge0) / (edge1 - edge0)).coerceIn(0f, 1f)
+    return t * t * (3f - 2f * t)
+}
+
+private fun cpuPackChannel(value: Float): Int =
+    (value.coerceIn(0f, 1f) * 255f + 0.5f).toInt()

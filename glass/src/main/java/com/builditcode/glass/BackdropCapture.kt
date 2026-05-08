@@ -5,8 +5,8 @@
  * - Source content uses a fast Picture capture path, then promotes to GraphicsLayer snapshots
  *   when a layer contains hardware-backed content.
  * - ALL modifiers are implemented as Modifier.Node to eliminate recomposition overhead.
- * - API 33+: AGSL RuntimeShader glass effect with refraction, dispersion, rim lighting.
- * - API 31+: Hardware-accelerated RenderEffect Gaussian blur.
+ * - API 34+: AGSL RuntimeShader glass effect with refraction, dispersion, rim lighting.
+ * - API 31+: Hardware-accelerated RenderEffect blur, with CPU glass fallback on API 31-33.
  * - API < 31: CPU StackBlur fallback (single-entry cache).
  */
 package com.builditcode.glass
@@ -440,7 +440,7 @@ private class BackdropCaptureNode(
             null
         }
 
-        filter.apply(this, layer, imageToBlur, density, cpuBlurCache, renderNode)
+        filter.apply(this, layer, result, imageToBlur, density, cpuBlurCache, renderNode)
         drawContent()
     }
 
@@ -516,12 +516,12 @@ sealed interface BackdropFilter {
     data class Glass(
         @field:FloatRange(0.0, 10.0) val blurRadiusIntensity: Float = 3f,
         val cornerRadiusDp: Float = 12f,
-        val refraction: Float = 0.15f,
-        val curve: Float = 0.2f,
-        val dispersion: Float = 0.12f,
-        val saturation: Float = 1.0f,
-        val contrast: Float = 1.0f,
-        val edge: Float = 0.2f,
+        val refraction: Float = 0.32f,
+        val curve: Float = 0.25f,
+        val dispersion: Float = 0.22f,
+        val saturation: Float = 1.1f,
+        val contrast: Float = 1.1f,
+        val edge: Float = 0.32f,
         val tint: Color = Color.Transparent,
     ) : BackdropFilter {
         val shader: RuntimeShader? by lazy { createGlassShader() }
@@ -604,13 +604,14 @@ sealed interface BackdropFilter {
 private fun BackdropFilter.apply(
     scope: ContentDrawScope,
     layer: GraphicsLayer?,
+    result: BackdropState.CaptureResult?,
     bitmap: ImageBitmap?,
     density: Float,
     cpuBlurCache: CpuBlurCache,
     renderNode: RenderNode?,
 ) = when (this) {
-    is BackdropFilter.Blur -> scope.drawBackdropBlur(this, layer, bitmap, density, cpuBlurCache, renderNode)
-    is BackdropFilter.Glass -> scope.drawBackdropGlass(this, layer, bitmap, density, cpuBlurCache, renderNode)
+    is BackdropFilter.Blur -> scope.drawBackdropBlur(this, layer, result, bitmap, density, cpuBlurCache, renderNode)
+    is BackdropFilter.Glass -> scope.drawBackdropGlass(this, layer, result, bitmap, density, cpuBlurCache, renderNode)
 }
 
 // =============================================================================
@@ -1009,6 +1010,7 @@ private fun bitmapFilterPaint(): Paint {
 private fun ContentDrawScope.drawBackdropGlass(
     glass: BackdropFilter.Glass,
     layer: GraphicsLayer?,
+    result: BackdropState.CaptureResult?,
     bitmap: ImageBitmap?,
     density: Float,
     cpuBlurCache: CpuBlurCache,
@@ -1016,26 +1018,38 @@ private fun ContentDrawScope.drawBackdropGlass(
 ) {
     val blurPx = glass.blurRadiusIntensity * 2f * density
 
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && layer != null) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && layer != null) {
         glass.applyUniforms(size.width, size.height, density)
         layer.renderEffect = glass.getOrBuildRenderEffect(blurPx)
         drawLayer(layer)
     } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        if (bitmap != null && renderNode != null) {
+        var tintHandledByCpuGlass = false
+        if (bitmap != null && result != null && glass.needsCpuGlassFallback()) {
+            val glassBitmap = cpuBlurCache.glass(
+                sourceBitmap = bitmap.asAndroidBitmap(),
+                radiusPx = blurPx.roundToInt(),
+                glass = glass,
+                density = density,
+                targetSize = result.drawSize
+            )
+            drawBitmapInCaptureRegion(glassBitmap.asImageBitmap(), result)
+            tintHandledByCpuGlass = true
+        } else if (bitmap != null && renderNode != null) {
             drawBitmapWithRenderNodeEffect(
                 bitmap,
                 glass.getOrBuildFallbackAndroidBlurEffect(blurPx),
-                renderNode
+                renderNode,
+                result
             )
         } else if (layer != null) {
             layer.renderEffect = glass.getOrBuildFallbackBlurEffect(blurPx)
             drawLayer(layer)
         }
-        drawRect(glass.tint)
+        if (!tintHandledByCpuGlass) drawRect(glass.tint)
     } else {
         if (bitmap != null && blurPx > 0f) {
             val blurred = cpuBlurCache.blur(bitmap.asAndroidBitmap(), blurPx.roundToInt())
-            drawImage(blurred.asImageBitmap(), dstSize = IntSize(size.width.toInt(), size.height.toInt()))
+            drawBitmapInCaptureRegion(blurred.asImageBitmap(), result)
         }
         drawRect(glass.tint)
     }
@@ -1044,6 +1058,7 @@ private fun ContentDrawScope.drawBackdropGlass(
 private fun ContentDrawScope.drawBackdropBlur(
     blur: BackdropFilter.Blur,
     layer: GraphicsLayer?,
+    result: BackdropState.CaptureResult?,
     bitmap: ImageBitmap?,
     density: Float,
     cpuBlurCache: CpuBlurCache,
@@ -1055,29 +1070,56 @@ private fun ContentDrawScope.drawBackdropBlur(
         layer.renderEffect = blur.getOrBuildBlurEffect(blurPx)
         drawLayer(layer)
     } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && bitmap != null && renderNode != null) {
-        drawBitmapWithRenderNodeEffect(bitmap, blur.getOrBuildAndroidBlurEffect(blurPx), renderNode)
+        drawBitmapWithRenderNodeEffect(bitmap, blur.getOrBuildAndroidBlurEffect(blurPx), renderNode, result)
     } else if (bitmap != null && blurPx > 0f) {
         val blurred = cpuBlurCache.blur(bitmap.asAndroidBitmap(), blurPx.roundToInt())
-        drawImage(blurred.asImageBitmap(), dstSize = IntSize(size.width.toInt(), size.height.toInt()))
+        drawBitmapInCaptureRegion(blurred.asImageBitmap(), result)
     }
     drawRect(blur.tint)
+}
+
+private fun BackdropFilter.Glass.needsCpuGlassFallback(): Boolean =
+    refraction > 0f ||
+            curve > 0f ||
+            dispersion > 0f ||
+            saturation != 1f ||
+            contrast != 1f ||
+            edge > 0f
+
+private fun ContentDrawScope.drawBitmapInCaptureRegion(
+    bitmap: ImageBitmap,
+    result: BackdropState.CaptureResult?
+) {
+    val drawSize = result?.drawSize ?: IntSize(size.width.toInt(), size.height.toInt())
+    val drawOffset = result?.drawOffset ?: Offset.Zero
+    translate(drawOffset.x, drawOffset.y) {
+        drawImage(bitmap, dstSize = drawSize)
+    }
 }
 
 @RequiresApi(Build.VERSION_CODES.S)
 private fun ContentDrawScope.drawBitmapWithRenderNodeEffect(
     bitmap: ImageBitmap,
     effect: RenderEffect?,
-    renderNode: RenderNode
+    renderNode: RenderNode,
+    result: BackdropState.CaptureResult?
 ) {
     val dstSize = IntSize(size.width.toInt(), size.height.toInt())
+    val drawSize = result?.drawSize ?: dstSize
+    val drawOffset = result?.drawOffset ?: Offset.Zero
     if (effect == null) {
-        drawImage(bitmap, dstSize = dstSize)
+        drawBitmapInCaptureRegion(bitmap, result)
         return
     }
 
     val width = dstSize.width.coerceAtLeast(1)
     val height = dstSize.height.coerceAtLeast(1)
-    val bitmapDst = android.graphics.Rect(0, 0, width, height)
+    val bitmapDst = android.graphics.RectF(
+        drawOffset.x,
+        drawOffset.y,
+        drawOffset.x + drawSize.width,
+        drawOffset.y + drawSize.height
+    )
     renderNode.setPosition(0, 0, width, height)
     renderNode.setRenderEffect(effect)
     val recordingCanvas = renderNode.beginRecording(width, height)
@@ -1098,6 +1140,13 @@ private class CpuBlurCache {
     private var radius: Int = 0
     private var result: Bitmap? = null
 
+    private var glassSource: Bitmap? = null
+    private var glassRadius: Int = 0
+    private var glassFilter: BackdropFilter.Glass? = null
+    private var glassDensity: Float = -1f
+    private var glassTargetSize: IntSize = IntSize.Zero
+    private var glassResult: Bitmap? = null
+
     fun blur(sourceBitmap: Bitmap, radiusPx: Int): Bitmap {
         if (radiusPx < 1) {
             clear()
@@ -1116,11 +1165,65 @@ private class CpuBlurCache {
         return blurred
     }
 
+    fun glass(
+        sourceBitmap: Bitmap,
+        radiusPx: Int,
+        glass: BackdropFilter.Glass,
+        density: Float,
+        targetSize: IntSize
+    ): Bitmap {
+        if (
+            sourceBitmap === glassSource &&
+            radiusPx == glassRadius &&
+            glassFilter == glass &&
+            glassDensity == density &&
+            glassTargetSize == targetSize
+        ) {
+            glassResult?.let { if (!it.isRecycled) return it }
+        }
+
+        val base = sourceBitmap.copy(Bitmap.Config.ARGB_8888, true)
+        val blurred = if (radiusPx > 0) applyStackBlur(base, radiusPx) else base
+        val scaleX = sourceBitmap.width / targetSize.width.coerceAtLeast(1).toFloat()
+        val scaleY = sourceBitmap.height / targetSize.height.coerceAtLeast(1).toFloat()
+        val cornerRadiusPx = glass.cornerRadiusDp * density * minOf(scaleX, scaleY)
+        val glassBitmap = applyCpuGlassFallback(
+            bitmap = blurred,
+            cornerRadiusPx = cornerRadiusPx,
+            refraction = glass.refraction,
+            curve = glass.curve,
+            dispersion = glass.dispersion,
+            saturation = glass.saturation,
+            contrast = glass.contrast,
+            edge = glass.edge,
+            tintRed = glass.tint.red,
+            tintGreen = glass.tint.green,
+            tintBlue = glass.tint.blue,
+            tintAlpha = glass.tint.alpha
+        )
+
+        glassResult?.safeRecycle()
+        glassSource = sourceBitmap
+        glassRadius = radiusPx
+        glassFilter = glass
+        glassDensity = density
+        glassTargetSize = targetSize
+        glassResult = glassBitmap
+        return glassBitmap
+    }
+
     fun clear() {
         result?.safeRecycle()
+        glassResult?.safeRecycle()
         source = null
         radius = 0
         result = null
+        glassSource = null
+        glassRadius = 0
+        glassFilter = null
+        glassDensity = -1f
+        glassTargetSize = IntSize.Zero
+        glassResult = null
     }
 }
 
