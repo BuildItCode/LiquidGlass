@@ -15,6 +15,7 @@ import android.graphics.Bitmap
 import android.graphics.Paint
 import android.graphics.Picture
 import android.graphics.RenderEffect
+import android.graphics.RenderNode
 import android.graphics.RuntimeShader
 import android.graphics.Shader
 import android.os.Build
@@ -47,9 +48,12 @@ import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.draw
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.layer.CompositingStrategy
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.positionInRoot
@@ -91,7 +95,6 @@ private fun Bitmap.safeRecycle() {
 
 private fun ImageBitmap.safeRecycle() {
     val bitmap = asAndroidBitmap()
-    clearCpuBlurCacheFor(bitmap)
     bitmap.safeRecycle()
 }
 
@@ -330,6 +333,10 @@ private class BackdropCaptureNode(
     private var lastPosition = Offset.Unspecified
     private var graphicsLayer: GraphicsLayer? = null
     private var lastResult: BackdropState.CaptureResult? = null
+    private val cpuBlurCache = CpuBlurCache()
+    private var nativeRenderNode: RenderNode? = null
+    private var nativeRenderNodeVersion: Long = Long.MIN_VALUE
+    private var lastResultVersion: Long = Long.MIN_VALUE
 
     fun update(newName: String, newFilter: BackdropFilter, newAutoMove: Boolean) {
         val layerChanged = layerName != newName
@@ -339,6 +346,10 @@ private class BackdropCaptureNode(
             layerName = newName
             cachedState = null
             lastResult = null
+            lastResultVersion = Long.MIN_VALUE
+            nativeRenderNode = null
+            nativeRenderNodeVersion = Long.MIN_VALUE
+            cpuBlurCache.clear()
         }
         filter = newFilter
         autoInvalidateOnMove = newAutoMove
@@ -347,13 +358,11 @@ private class BackdropCaptureNode(
 
     override fun onAttach() {
         regionId = BackdropState.nextRegionId()
-        graphicsLayer = requireGraphicsContext().createGraphicsLayer()
-    }
-
-    override fun onDetach() {
-        cachedState?.unregisterRegion(regionId)
-        graphicsLayer?.let { requireGraphicsContext().releaseGraphicsLayer(it) }
-        graphicsLayer = null
+        graphicsLayer = requireGraphicsContext().createGraphicsLayer().also { layer ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                layer.compositingStrategy = CompositingStrategy.Offscreen
+            }
+        }
     }
 
     override fun onObservedReadsChanged() {
@@ -378,39 +387,60 @@ private class BackdropCaptureNode(
 
     override fun ContentDrawScope.draw() {
         observeReads {
-            cachedState?.resultInvalidator
-            lastResult = cachedState?.getResult(regionId)
+            val state = cachedState
+            lastResultVersion = state?.resultInvalidator ?: Long.MIN_VALUE
+            lastResult = state?.getResult(regionId)
         }
 
         val result = lastResult
 
         if (result == null) {
             cachedState?.requestCaptureIfMissing()
+            cpuBlurCache.clear()
         }
 
-        val layer = graphicsLayer ?: return run { drawContent() }
+        val useGraphicsLayer = result != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+        val layer = graphicsLayer
 
-        layer.renderEffect = null
-        layer.record(this.size.toIntSize()) {
-            if (result != null) {
-                translate(result.drawOffset.x, result.drawOffset.y) {
-                    val fb = result.fallbackBitmap
+        if (useGraphicsLayer) {
+            val captureResult = result ?: return run { drawContent() }
+            if (layer == null) return run { drawContent() }
+            layer.renderEffect = null
+            layer.record(this.size.toIntSize()) {
+                translate(captureResult.drawOffset.x, captureResult.drawOffset.y) {
+                    val fb = captureResult.fallbackBitmap
                     if (fb != null) {
-                        drawImage(image = fb, dstSize = result.drawSize)
+                        drawImage(image = fb, dstSize = captureResult.drawSize)
                     } else {
                         drawImage(
-                            image = result.masterImage,
-                            srcOffset = result.srcOffset,
-                            srcSize = result.srcSize,
-                            dstSize = result.drawSize
+                            image = captureResult.masterImage,
+                            srcOffset = captureResult.srcOffset,
+                            srcSize = captureResult.srcSize,
+                            dstSize = captureResult.drawSize
                         )
                     }
                 }
             }
+        } else {
+            layer?.renderEffect = null
         }
 
-        val imageToBlur = result?.fallbackBitmap ?: result?.masterImage
-        filter.apply(this, layer, imageToBlur, density)
+        val imageToBlur = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            result?.fallbackBitmap
+        } else {
+            result?.masterImage
+        }
+        val renderNode = if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU &&
+            imageToBlur != null
+        ) {
+            getOrCreateNativeRenderNode(lastResultVersion)
+        } else {
+            null
+        }
+
+        filter.apply(this, layer, imageToBlur, density, cpuBlurCache, renderNode)
         drawContent()
     }
 
@@ -418,6 +448,28 @@ private class BackdropCaptureNode(
         cachedState = null
         lastPosition = Offset.Unspecified
         lastResult = null
+        lastResultVersion = Long.MIN_VALUE
+        cpuBlurCache.clear()
+    }
+
+    override fun onDetach() {
+        cachedState?.unregisterRegion(regionId)
+        graphicsLayer?.let { requireGraphicsContext().releaseGraphicsLayer(it) }
+        graphicsLayer = null
+        nativeRenderNode = null
+        nativeRenderNodeVersion = Long.MIN_VALUE
+        cpuBlurCache.clear()
+    }
+
+    @RequiresApi(Build.VERSION_CODES.S)
+    private fun getOrCreateNativeRenderNode(version: Long): RenderNode {
+        val existing = nativeRenderNode
+        if (existing != null && nativeRenderNodeVersion == version) return existing
+
+        return RenderNode("BackdropFilter").also {
+            nativeRenderNode = it
+            nativeRenderNodeVersion = version
+        }
     }
 }
 
@@ -435,6 +487,8 @@ sealed interface BackdropFilter {
     ) : BackdropFilter {
         @Volatile private var cachedBlurPx: Float = -1f
         @Volatile private var cachedEffect: androidx.compose.ui.graphics.RenderEffect? = null
+        @Volatile private var cachedAndroidBlurPx: Float = -1f
+        @Volatile private var cachedAndroidEffect: RenderEffect? = null
 
         @RequiresApi(Build.VERSION_CODES.S)
         internal fun getOrBuildBlurEffect(blurPx: Float): androidx.compose.ui.graphics.RenderEffect? {
@@ -444,6 +498,16 @@ sealed interface BackdropFilter {
                 .asComposeRenderEffect()
             cachedEffect = effect
             cachedBlurPx = blurPx
+            return effect
+        }
+
+        @RequiresApi(Build.VERSION_CODES.S)
+        internal fun getOrBuildAndroidBlurEffect(blurPx: Float): RenderEffect? {
+            if (blurPx <= 0f) return null
+            cachedAndroidEffect?.takeIf { cachedAndroidBlurPx == blurPx }?.let { return it }
+            val effect = RenderEffect.createBlurEffect(blurPx, blurPx, Shader.TileMode.CLAMP)
+            cachedAndroidEffect = effect
+            cachedAndroidBlurPx = blurPx
             return effect
         }
     }
@@ -466,6 +530,8 @@ sealed interface BackdropFilter {
         private var cachedBlurPx: Float = -1f
         private var cachedFallbackBlurPx: Float = -1f
         private var cachedFallbackEffect: androidx.compose.ui.graphics.RenderEffect? = null
+        private var cachedFallbackAndroidBlurPx: Float = -1f
+        private var cachedFallbackAndroidEffect: RenderEffect? = null
         private var lastDensity = -1f
         private var lastW = -1f
         private var lastH = -1f
@@ -500,6 +566,16 @@ sealed interface BackdropFilter {
             return effect
         }
 
+        @RequiresApi(Build.VERSION_CODES.S)
+        internal fun getOrBuildFallbackAndroidBlurEffect(blurPx: Float): RenderEffect? {
+            if (blurPx <= 0f) return null
+            cachedFallbackAndroidEffect?.takeIf { cachedFallbackAndroidBlurPx == blurPx }?.let { return it }
+            val effect = RenderEffect.createBlurEffect(blurPx, blurPx, Shader.TileMode.CLAMP)
+            cachedFallbackAndroidEffect = effect
+            cachedFallbackAndroidBlurPx = blurPx
+            return effect
+        }
+
         @RequiresApi(Build.VERSION_CODES.TIRAMISU)
         internal fun applyUniforms(w: Float, h: Float, density: Float) {
             val s = shader ?: return
@@ -525,14 +601,16 @@ sealed interface BackdropFilter {
     }
 }
 
-internal fun BackdropFilter.apply(
+private fun BackdropFilter.apply(
     scope: ContentDrawScope,
-    layer: GraphicsLayer,
+    layer: GraphicsLayer?,
     bitmap: ImageBitmap?,
     density: Float,
+    cpuBlurCache: CpuBlurCache,
+    renderNode: RenderNode?,
 ) = when (this) {
-    is BackdropFilter.Blur -> scope.drawBackdropBlur(this, layer, bitmap, density)
-    is BackdropFilter.Glass -> scope.drawBackdropGlass(this, layer, bitmap, density)
+    is BackdropFilter.Blur -> scope.drawBackdropBlur(this, layer, bitmap, density, cpuBlurCache, renderNode)
+    is BackdropFilter.Glass -> scope.drawBackdropGlass(this, layer, bitmap, density, cpuBlurCache, renderNode)
 }
 
 // =============================================================================
@@ -556,6 +634,13 @@ class BackdropState internal constructor(
     )
 
     private data class Region(val rect: Rect, val result: CaptureResult? = null)
+
+    private data class CropGeometry(
+        val srcOffset: IntOffset,
+        val srcSize: IntSize,
+        val drawOffset: Offset,
+        val drawSize: IntSize
+    )
 
     companion object {
         private val idCounter = AtomicInteger(0)
@@ -636,18 +721,35 @@ class BackdropState internal constructor(
         if (existing != null && existing.rect == rect) return
 
         val isNew = existing == null
-        existing?.result?.fallbackBitmap?.safeRecycle()
-        regions[id] = Region(rect)
-        resultInvalidator++
-
-        // Attempt a synchronous crop if we already have a master image.
+        val oldResult = existing?.result
         val master = masterImage
-        if (master != null) {
-            cropForRegion(rect, masterSourceRect, master, masterScaledW, masterScaledH)?.let {
-                regions[id] = Region(rect, it)
-                resultInvalidator++
-            }
+        val geometry = if (master != null) {
+            cropGeometryForRegion(rect, masterSourceRect, masterScaledW, masterScaledH)
+        } else {
+            null
         }
+
+        val canReuseResult = oldResult != null &&
+                master != null &&
+                geometry != null &&
+                oldResult.matches(master, geometry)
+        val newResult = when {
+            canReuseResult -> oldResult
+            master != null && geometry != null -> captureResultForGeometry(master, geometry)
+            else -> null
+        }
+        val visibleSame = existing != null && when {
+            oldResult == null && newResult == null -> true
+            canReuseResult -> true
+            oldResult != null && newResult != null -> oldResult.visibleEquals(newResult)
+            else -> false
+        }
+
+        if (!canReuseResult) {
+            oldResult?.fallbackBitmap?.safeRecycle()
+        }
+        regions[id] = Region(rect, newResult)
+        if (!visibleSame) resultInvalidator++
         if (isNew) requestCapture()
     }
 
@@ -803,7 +905,6 @@ class BackdropState internal constructor(
 
         val bitmap = oldMaster.asAndroidBitmap()
         if (!bitmap.isRecycled && bitmap.isMutable) {
-            clearCpuBlurCacheFor(bitmap)
             reusableBitmap?.takeIf { it !== bitmap }?.safeRecycle()
             reusableBitmap = bitmap
         } else {
@@ -826,9 +927,9 @@ class BackdropState internal constructor(
         }
     }
 
-    private fun cropForRegion(
-        regionRect: Rect, source: Rect, master: ImageBitmap, scaledW: Int, scaledH: Int
-    ): CaptureResult? {
+    private fun cropGeometryForRegion(
+        regionRect: Rect, source: Rect, scaledW: Int, scaledH: Int
+    ): CropGeometry? {
         val intersection = regionRect.intersect(source)
         if (intersection.isEmpty) return null
 
@@ -846,84 +947,181 @@ class BackdropState internal constructor(
         val drawOffset = (intersection.topLeft - regionRect.topLeft) - Offset(errorX, errorY)
         val drawSize = IntSize((w / scaleFactor).roundToInt(), (h / scaleFactor).roundToInt())
 
-        val fallback = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            cropBitmap(master, Rect(l.toFloat(), t.toFloat(), r.toFloat(), b.toFloat()))
+        return CropGeometry(IntOffset(l, t), IntSize(w, h), drawOffset, drawSize)
+    }
+
+    private fun cropForRegion(
+        regionRect: Rect, source: Rect, master: ImageBitmap, scaledW: Int, scaledH: Int
+    ): CaptureResult? {
+        val geometry = cropGeometryForRegion(regionRect, source, scaledW, scaledH) ?: return null
+        return captureResultForGeometry(master, geometry)
+    }
+
+    private fun captureResultForGeometry(master: ImageBitmap, geometry: CropGeometry): CaptureResult {
+        val fallback = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            cropBitmap(
+                master,
+                Rect(
+                    geometry.srcOffset.x.toFloat(),
+                    geometry.srcOffset.y.toFloat(),
+                    (geometry.srcOffset.x + geometry.srcSize.width).toFloat(),
+                    (geometry.srcOffset.y + geometry.srcSize.height).toFloat()
+                )
+            )
         } else null
 
-        return CaptureResult(master, IntOffset(l, t), IntSize(w, h), drawOffset, drawSize, fallback)
+        return CaptureResult(
+            master,
+            geometry.srcOffset,
+            geometry.srcSize,
+            geometry.drawOffset,
+            geometry.drawSize,
+            fallback
+        )
     }
+
+    private fun CaptureResult.matches(master: ImageBitmap, geometry: CropGeometry): Boolean =
+        masterImage === master &&
+                srcOffset == geometry.srcOffset &&
+                srcSize == geometry.srcSize &&
+                drawOffset == geometry.drawOffset &&
+                drawSize == geometry.drawSize
+
+    private fun CaptureResult.visibleEquals(other: CaptureResult): Boolean =
+        masterImage === other.masterImage &&
+                srcOffset == other.srcOffset &&
+                srcSize == other.srcSize &&
+                drawOffset == other.drawOffset &&
+                drawSize == other.drawSize
 }
 
 // =============================================================================
 // RENDERING
 // =============================================================================
 
-private val cropPaint = Paint().apply { isFilterBitmap = true }
+private val bitmapPaintThreadLocal = ThreadLocal<Paint>()
 
-internal fun ContentDrawScope.drawBackdropGlass(
-    glass: BackdropFilter.Glass, layer: GraphicsLayer, bitmap: ImageBitmap?, density: Float,
+private fun bitmapFilterPaint(): Paint {
+    bitmapPaintThreadLocal.get()?.let { return it }
+    return Paint().apply { isFilterBitmap = true }.also(bitmapPaintThreadLocal::set)
+}
+
+private fun ContentDrawScope.drawBackdropGlass(
+    glass: BackdropFilter.Glass,
+    layer: GraphicsLayer?,
+    bitmap: ImageBitmap?,
+    density: Float,
+    cpuBlurCache: CpuBlurCache,
+    renderNode: RenderNode?,
 ) {
     val blurPx = glass.blurRadiusIntensity * 2f * density
 
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && layer != null) {
         glass.applyUniforms(size.width, size.height, density)
         layer.renderEffect = glass.getOrBuildRenderEffect(blurPx)
         drawLayer(layer)
     } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        layer.renderEffect = glass.getOrBuildFallbackBlurEffect(blurPx)
-        drawLayer(layer)
+        if (bitmap != null && renderNode != null) {
+            drawBitmapWithRenderNodeEffect(
+                bitmap,
+                glass.getOrBuildFallbackAndroidBlurEffect(blurPx),
+                renderNode
+            )
+        } else if (layer != null) {
+            layer.renderEffect = glass.getOrBuildFallbackBlurEffect(blurPx)
+            drawLayer(layer)
+        }
         drawRect(glass.tint)
     } else {
         if (bitmap != null && blurPx > 0f) {
-            val blurred = cpuBlur(bitmap.asAndroidBitmap(), blurPx.roundToInt())
+            val blurred = cpuBlurCache.blur(bitmap.asAndroidBitmap(), blurPx.roundToInt())
             drawImage(blurred.asImageBitmap(), dstSize = IntSize(size.width.toInt(), size.height.toInt()))
         }
         drawRect(glass.tint)
     }
 }
 
-internal fun ContentDrawScope.drawBackdropBlur(
-    blur: BackdropFilter.Blur, layer: GraphicsLayer, bitmap: ImageBitmap?, density: Float,
+private fun ContentDrawScope.drawBackdropBlur(
+    blur: BackdropFilter.Blur,
+    layer: GraphicsLayer?,
+    bitmap: ImageBitmap?,
+    density: Float,
+    cpuBlurCache: CpuBlurCache,
+    renderNode: RenderNode?,
 ) {
     val blurPx = blur.blurRadiusIntensity * 2f * density
 
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && layer != null) {
         layer.renderEffect = blur.getOrBuildBlurEffect(blurPx)
         drawLayer(layer)
+    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && bitmap != null && renderNode != null) {
+        drawBitmapWithRenderNodeEffect(bitmap, blur.getOrBuildAndroidBlurEffect(blurPx), renderNode)
     } else if (bitmap != null && blurPx > 0f) {
-        val blurred = cpuBlur(bitmap.asAndroidBitmap(), blurPx.roundToInt())
+        val blurred = cpuBlurCache.blur(bitmap.asAndroidBitmap(), blurPx.roundToInt())
         drawImage(blurred.asImageBitmap(), dstSize = IntSize(size.width.toInt(), size.height.toInt()))
     }
     drawRect(blur.tint)
+}
+
+@RequiresApi(Build.VERSION_CODES.S)
+private fun ContentDrawScope.drawBitmapWithRenderNodeEffect(
+    bitmap: ImageBitmap,
+    effect: RenderEffect?,
+    renderNode: RenderNode
+) {
+    val dstSize = IntSize(size.width.toInt(), size.height.toInt())
+    if (effect == null) {
+        drawImage(bitmap, dstSize = dstSize)
+        return
+    }
+
+    val width = dstSize.width.coerceAtLeast(1)
+    val height = dstSize.height.coerceAtLeast(1)
+    val bitmapDst = android.graphics.Rect(0, 0, width, height)
+    renderNode.setPosition(0, 0, width, height)
+    renderNode.setRenderEffect(effect)
+    val recordingCanvas = renderNode.beginRecording(width, height)
+    recordingCanvas.drawBitmap(bitmap.asAndroidBitmap(), null, bitmapDst, bitmapFilterPaint())
+    renderNode.endRecording()
+
+    drawIntoCanvas { canvas ->
+        canvas.nativeCanvas.drawRenderNode(renderNode)
+    }
 }
 
 // =============================================================================
 // CPU BLUR FALLBACK (< API 31)
 // =============================================================================
 
-private var cachedBlurSource: Bitmap? = null
-private var cachedBlurRadius: Int = 0
-private var cachedBlurResult: Bitmap? = null
+private class CpuBlurCache {
+    private var source: Bitmap? = null
+    private var radius: Int = 0
+    private var result: Bitmap? = null
 
-private fun cpuBlur(source: Bitmap, radius: Int): Bitmap {
-    if (radius < 1) return source
-    if (source === cachedBlurSource && radius == cachedBlurRadius) {
-        cachedBlurResult?.let { if (!it.isRecycled) return it }
+    fun blur(sourceBitmap: Bitmap, radiusPx: Int): Bitmap {
+        if (radiusPx < 1) {
+            clear()
+            return sourceBitmap
+        }
+
+        if (sourceBitmap === source && radiusPx == radius) {
+            result?.let { if (!it.isRecycled) return it }
+        }
+
+        val blurred = applyStackBlur(sourceBitmap.copy(Bitmap.Config.ARGB_8888, true), radiusPx)
+        result?.safeRecycle()
+        source = sourceBitmap
+        radius = radiusPx
+        result = blurred
+        return blurred
     }
-    val blurred = applyStackBlur(source.copy(Bitmap.Config.ARGB_8888, true), radius)
-    cachedBlurResult?.safeRecycle()
-    cachedBlurSource = source
-    cachedBlurRadius = radius
-    cachedBlurResult = blurred
-    return blurred
-}
 
-private fun clearCpuBlurCacheFor(source: Bitmap) {
-    if (cachedBlurSource !== source) return
-    cachedBlurResult?.safeRecycle()
-    cachedBlurSource = null
-    cachedBlurRadius = 0
-    cachedBlurResult = null
+    fun clear() {
+        result?.safeRecycle()
+        source = null
+        radius = 0
+        result = null
+    }
 }
 
 // =============================================================================
@@ -953,7 +1151,7 @@ private fun cropBitmap(source: ImageBitmap, rect: Rect): ImageBitmap? {
             source.asAndroidBitmap(),
             android.graphics.Rect(l, t, r, b),
             android.graphics.Rect(0, 0, w, h),
-            cropPaint
+            bitmapFilterPaint()
         )
         out.asImageBitmap()
     } catch (e: Exception) {

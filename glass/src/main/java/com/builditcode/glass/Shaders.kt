@@ -228,10 +228,10 @@ internal fun applyStackBlur(bitmap: Bitmap, radius: Int): Bitmap {
         yi = x; stackpointer = radius
         y = 0
         while (y < h) {
-            pixels[yi] = ((a[yi] * mulSum) ushr shrSum shl 24) or
-                    ((r[yi] * mulSum) ushr shrSum shl 16) or
-                    ((g[yi] * mulSum) ushr shrSum shl 8) or
-                    ((b[yi] * mulSum) ushr shrSum)
+            pixels[yi] = ((asum * mulSum) ushr shrSum shl 24) or
+                    ((rsum * mulSum) ushr shrSum shl 16) or
+                    ((gsum * mulSum) ushr shrSum shl 8) or
+                    ((bsum * mulSum) ushr shrSum)
             rsum -= routsum; gsum -= goutsum; bsum -= boutsum; asum -= aoutsum
             stackstart = stackpointer - radius + div
             sir = stack[stackstart % div]
