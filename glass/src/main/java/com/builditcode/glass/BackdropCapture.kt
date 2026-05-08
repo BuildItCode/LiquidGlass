@@ -95,6 +95,18 @@ private fun ImageBitmap.safeRecycle() {
     bitmap.safeRecycle()
 }
 
+private fun ImageBitmap.softwareCopyFromHardware(): ImageBitmap? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return null
+    val bitmap = asAndroidBitmap()
+    if (bitmap.config != Bitmap.Config.HARDWARE) return null
+    return try {
+        bitmap.copy(Bitmap.Config.ARGB_8888, false)?.asImageBitmap()
+    } catch (e: Exception) {
+        Log.w("BackdropSnapshot", "Failed to copy hardware bitmap for CPU fallback", e)
+        null
+    }
+}
+
 // =============================================================================
 // LAYER MANAGER
 // =============================================================================
@@ -199,7 +211,8 @@ private class BackdropSourceNode(
 ) : Modifier.Node(),
     GlobalPositionAwareModifierNode,
     CompositionLocalConsumerModifierNode,
-    DrawModifierNode {
+    DrawModifierNode,
+    ObserverModifierNode {
 
     private var cachedState: BackdropState? = null
     private val picture = Picture()
@@ -221,6 +234,10 @@ private class BackdropSourceNode(
         cachedState = null
     }
 
+    override fun onObservedReadsChanged() {
+        invalidateDraw()
+    }
+
     override fun ContentDrawScope.draw() {
         val state = cachedState
 
@@ -229,8 +246,9 @@ private class BackdropSourceNode(
             return
         }
 
-        // Read snapshot state to bind invalidation to the draw phase
-        state.sourceInvalidator
+        observeReads {
+            state.sourceInvalidator
+        }
 
         val w = size.width.roundToInt()
         val h = size.height.roundToInt()
@@ -269,6 +287,7 @@ private class BackdropSourceNode(
                 Log.e("BackdropSource", "Failed to capture backdrop source", e)
             }
         } else {
+            state.requestCaptureAfterPendingWork()
             drawContent()
         }
     }
@@ -313,13 +332,17 @@ private class BackdropCaptureNode(
     private var lastResult: BackdropState.CaptureResult? = null
 
     fun update(newName: String, newFilter: BackdropFilter, newAutoMove: Boolean) {
-        if (layerName != newName) {
+        val layerChanged = layerName != newName
+        val shouldInvalidate = layerChanged || filter != newFilter || autoInvalidateOnMove != newAutoMove
+        if (layerChanged) {
             cachedState?.unregisterRegion(regionId)
             layerName = newName
             cachedState = null
+            lastResult = null
         }
         filter = newFilter
         autoInvalidateOnMove = newAutoMove
+        if (shouldInvalidate) invalidateDraw()
     }
 
     override fun onAttach() {
@@ -355,6 +378,7 @@ private class BackdropCaptureNode(
 
     override fun ContentDrawScope.draw() {
         observeReads {
+            cachedState?.resultInvalidator
             lastResult = cachedState?.getResult(regionId)
         }
 
@@ -366,6 +390,7 @@ private class BackdropCaptureNode(
 
         val layer = graphicsLayer ?: return run { drawContent() }
 
+        layer.renderEffect = null
         layer.record(this.size.toIntSize()) {
             if (result != null) {
                 translate(result.drawOffset.x, result.drawOffset.y) {
@@ -542,6 +567,9 @@ class BackdropState internal constructor(
     internal var sourceInvalidator by mutableLongStateOf(0L)
         private set
 
+    internal var resultInvalidator by mutableLongStateOf(0L)
+        private set
+
     private var masterImage: ImageBitmap? = null
     private var reusableBitmap: Bitmap? = null
 
@@ -585,7 +613,6 @@ class BackdropState internal constructor(
 
     val shouldCapture: Boolean
         get() = regions.isNotEmpty()
-                && captureRequested
                 && processingJob?.isActive != true
                 && debounced()
                 && isUpdateEnabled()
@@ -595,7 +622,13 @@ class BackdropState internal constructor(
     fun requestCapture() {
         if (regions.isEmpty()) return
         captureRequested = true
+        if (isProcessing) return
         invalidateOrSchedule()
+    }
+
+    internal fun requestCaptureAfterPendingWork() {
+        if (regions.isEmpty() || !isUpdateEnabled() || (debounced() && !isProcessing)) return
+        requestCapture()
     }
 
     internal fun registerRegion(id: Int, rect: Rect) {
@@ -605,12 +638,14 @@ class BackdropState internal constructor(
         val isNew = existing == null
         existing?.result?.fallbackBitmap?.safeRecycle()
         regions[id] = Region(rect)
+        resultInvalidator++
 
         // Attempt a synchronous crop if we already have a master image.
         val master = masterImage
         if (master != null) {
             cropForRegion(rect, masterSourceRect, master, masterScaledW, masterScaledH)?.let {
                 regions[id] = Region(rect, it)
+                resultInvalidator++
             }
         }
         if (isNew) requestCapture()
@@ -638,8 +673,7 @@ class BackdropState internal constructor(
     }
 
     internal fun onPictureRecorded(picture: Picture, width: Int, height: Int) {
-        captureRequested = false
-        lastCaptureTime = System.currentTimeMillis()
+        beginCapture()
 
         val scaledW = (width * scaleFactor).roundToInt().coerceAtLeast(1)
         val scaledH = (height * scaleFactor).roundToInt().coerceAtLeast(1)
@@ -679,9 +713,11 @@ class BackdropState internal constructor(
                     processingJob = null
                     if (isHardwareBitmapSoftwareFailure(e)) {
                         useHardwareSnapshot = true
+                        lastCaptureTime = 0L
                         requestCapture()
                     } else {
                         Log.w("BackdropState", "Processing failed (${scaledW}x${scaledH})", e)
+                        if (captureRequested) invalidateOrSchedule()
                     }
                 }
             }
@@ -689,8 +725,7 @@ class BackdropState internal constructor(
     }
 
     internal fun onHardwareLayerRecorded(layer: GraphicsLayer, captureSize: IntSize) {
-        captureRequested = false
-        lastCaptureTime = System.currentTimeMillis()
+        beginCapture()
 
         val scaledW = captureSize.width
         val scaledH = captureSize.height
@@ -701,12 +736,19 @@ class BackdropState internal constructor(
             var snapshot: ImageBitmap? = null
             try {
                 snapshot = layer.toImageBitmap()
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                    snapshot?.softwareCopyFromHardware()?.let { softwareSnapshot ->
+                        snapshot?.safeRecycle()
+                        snapshot = softwareSnapshot
+                    }
+                }
+                val captured = snapshot ?: return@launch
                 if (!isActive) {
-                    snapshot.safeRecycle()
+                    captured.safeRecycle()
                     snapshot = null
                     return@launch
                 }
-                applyMasterImage(snapshot, currentSource, scaledW, scaledH, reuseOldMaster = false)
+                applyMasterImage(captured, currentSource, scaledW, scaledH, reuseOldMaster = false)
                 snapshot = null
             } catch (e: CancellationException) {
                 snapshot?.safeRecycle()
@@ -738,11 +780,19 @@ class BackdropState internal constructor(
             region.result?.fallbackBitmap?.safeRecycle()
             regions[id] = region.copy(result = result)
         }
+        resultInvalidator++
 
         recycleOrReuseOldMaster(oldMaster, reuseOldMaster)
         processingJob = null
 
         if (captureRequested) invalidateOrSchedule()
+    }
+
+    private fun beginCapture() {
+        captureRequested = false
+        lastCaptureTime = System.currentTimeMillis()
+        scheduledJob?.cancel()
+        scheduledJob = null
     }
 
     private fun recycleOrReuseOldMaster(oldMaster: ImageBitmap?, reuseOldMaster: Boolean) {
@@ -820,7 +870,7 @@ internal fun ContentDrawScope.drawBackdropGlass(
         layer.renderEffect = glass.getOrBuildRenderEffect(blurPx)
         drawLayer(layer)
     } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        glass.getOrBuildFallbackBlurEffect(blurPx)?.let { layer.renderEffect = it }
+        layer.renderEffect = glass.getOrBuildFallbackBlurEffect(blurPx)
         drawLayer(layer)
         drawRect(glass.tint)
     } else {
@@ -838,7 +888,7 @@ internal fun ContentDrawScope.drawBackdropBlur(
     val blurPx = blur.blurRadiusIntensity * 2f * density
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        blur.getOrBuildBlurEffect(blurPx)?.let { layer.renderEffect = it }
+        layer.renderEffect = blur.getOrBuildBlurEffect(blurPx)
         drawLayer(layer)
     } else if (bitmap != null && blurPx > 0f) {
         val blurred = cpuBlur(bitmap.asAndroidBitmap(), blurPx.roundToInt())
