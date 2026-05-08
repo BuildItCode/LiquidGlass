@@ -1,13 +1,13 @@
 # Glass Backdrop Effect
 
-Part of the Lucid design system. A Jetpack Compose toolkit for real-time frosted glass and blur effects: glass panels sample the live UI behind them — including scrolling content — and apply physically-based shader effects with no manual state wiring required.
+Part of the Lucid design system. A Jetpack Compose toolkit for real-time frosted glass and blur effects: glass panels sample the live UI behind them — including scrolling content, animated content, moving capture regions, and hardware-backed images — and apply physically-based shader effects with no manual state wiring required.
 
 ## How It Works
 
 The system has two sides:
 
-- **Source** — a `Modifier.Node` that starts with a fast downscaled `Picture` capture and automatically promotes that layer to a `GraphicsLayer` snapshot if the source contains Compose-rendered hardware bitmaps.
-- **Capture** — a `Modifier.Node` that crops that bitmap to its on-screen region and applies a blur or glass `RenderEffect` through a `GraphicsLayer`.
+- **Source** — a `Modifier.Node` that starts with a fast downscaled `Picture` capture and automatically promotes that layer to a `GraphicsLayer` snapshot if Android reports that the scene contains hardware-backed content that cannot be drawn into a software canvas.
+- **Capture** — a `Modifier.Node` that crops the current snapshot to its on-screen region, keeps that crop up to date as the source or capture node moves, and applies blur or glass through the best available path for the current API level.
 
 Both modifiers are implemented as `Modifier.Node` (no recomposition overhead). Recapture is driven implicitly by the draw phase: any time a source's `draw()` is re-invoked (e.g. its child content scrolls or animates), the source queues a fresh capture after the manager's debounce interval.
 
@@ -47,6 +47,8 @@ Box(
 ```
 
 Recapture is driven by Compose's draw phase: any redraw of the source subtree (a scrolling `LazyColumn`, an animating child, a state change) re-runs the source's `draw()`, which queues a new downscaled capture after the manager's debounce interval. You don't need to pass `LazyListState` or any explicit triggers — if the pixels under the source change, a recapture is queued.
+
+If the source contains hardware-backed content such as a Compose image decoded with a hardware bitmap, the source promotes itself to the hardware snapshot path automatically. The caller does not need to mark a source as "hardware".
 
 ### 3. Add glass panels
 
@@ -157,7 +159,7 @@ BackdropFilter.Blur(
 )
 ```
 
-**API compatibility:** Hardware-accelerated on API 31+. CPU Stack Blur fallback on API 24–30.
+**API compatibility:** Full hardware blur on API 33+. API 31–32 uses a hardware `RenderEffect` blur over the captured bitmap via `RenderNode`. API 24–30 uses the CPU Stack Blur fallback.
 
 ---
 
@@ -179,7 +181,7 @@ BackdropFilter.Glass(
 )
 ```
 
-**API compatibility:** Full AGSL shader on API 33+ (Tiramisu). Falls back to a hardware `RenderEffect` blur on API 31–32. CPU Stack Blur fallback on API 24–30.
+**API compatibility:** Full AGSL shader on API 33+ (Tiramisu). API 31–32 falls back to hardware `RenderEffect` blur over the captured bitmap. API 24–30 uses the CPU Stack Blur fallback.
 
 > `cornerRadiusDp` should match the `dp` value used in the `shape` passed to `layeredBackdropCapture` for physically accurate edge refraction. The shader compiles lazily on first draw and is cached on the `Glass` instance, so allocating a new `Glass()` per recomposition is cheap.
 
@@ -304,7 +306,8 @@ While `shouldUpdate` is `false`, the source nodes short-circuit snapshot recordi
 
 - **Scale factor**: The single biggest lever. `0.4f` (default) gives a good blur with ~6× fewer pixels to process than full resolution. Drop to `0.3f` for more aggressive savings on heavy scenes.
 - **Debounce**: `32ms` is the manager default (~30 fps). Drop to `16ms` for 60 fps recapture if the background animates continuously, or raise it if the background changes rarely.
-- **Adaptive capture**: Software-renderable layers stay on the lower-overhead `Picture` path with bitmap reuse. Layers that contain Compose-rendered hardware bitmaps promote once to the `GraphicsLayer` snapshot path, without a caller-provided flag.
+- **Adaptive capture**: Software-renderable layers stay on the lower-overhead `Picture` path with bitmap reuse. Layers that contain hardware-backed content promote once to the `GraphicsLayer` snapshot path, without a caller-provided flag.
+- **Hardware snapshots**: The hardware path is meant for Compose-rendered hardware content such as hardware bitmaps. Keep the source subtree scoped to the pixels that glass panels actually need; capturing an entire launcher page at high scale during continuous animation is still real work.
 - **Shader compilation**: `BackdropFilter.Glass` compiles its AGSL shader lazily on first draw and caches it on the instance, so allocating a new `Glass()` per recomposition is cheap.
 - **`autoInvalidateOnMove`**: When a glass capture node moves on screen, it invalidates *other* layers (excluding its own) so layered glass-on-glass stays in sync during drag. Disable it if you have many capture nodes that move independently and you don't need layered effects to track them.
 - **Overscroll**: Disable the stretch/glow overscroll effect when using glass over a `LazyColumn` to avoid visual artifacts: wrap the list in `CompositionLocalProvider(LocalOverscrollFactory provides null)`.

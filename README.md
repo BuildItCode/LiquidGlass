@@ -1,6 +1,6 @@
 # Liquid Glass
 
-A Jetpack Compose library for real-time frosted glass, blur, and refractive glass effects. Glass panels sample the live UI behind them — scrolling content, animations, drag gestures — and apply physically-based shader effects with no manual state wiring.
+A Jetpack Compose library for real-time frosted glass, blur, and refractive glass effects. Glass panels sample the live UI behind them — scrolling content, animations, drag gestures, and hardware-backed images — and apply physically-based shader effects with no manual state wiring.
 
 Part of the **Lucid** design system.
 
@@ -8,7 +8,8 @@ Part of the **Lucid** design system.
 
 ## Features
 
-- **Live sampling** — glass surfaces capture and refract the pixels under them every frame, including scroll and animation.
+- **Live sampling** — glass surfaces capture and refract the pixels under them, including scroll, animation, and moving capture regions.
+- **Hardware-backed content** — sources automatically promote from the low-overhead software capture path to a hardware snapshot path when the scene contains hardware-accelerated content such as hardware bitmaps.
 - **Physically-based shader** — AGSL glass effect with refraction, chromatic dispersion, lens curvature, and edge rim lighting.
 - **Layered glass** — named source layers let you stack glass over glass (e.g. a modal sheet over a glass card over scroll content).
 - **API 24+** — full AGSL shader on API 33+ (Tiramisu), hardware `RenderEffect` blur on API 31–32, CPU Stack Blur fallback on API 24–30.
@@ -37,9 +38,21 @@ Add the dependency:
 
 ```kotlin
 dependencies {
-    implementation("com.github.BuildItCode:glass:0.0.1")
+    implementation("com.github.BuildItCode:LiquidGlass:0.1")
 }
 ```
+
+Or with a version catalog:
+
+```toml
+[versions]
+glass = "0.1"
+
+[libraries]
+glass = { group = "com.github.BuildItCode", name = "LiquidGlass", version.ref = "glass" }
+```
+
+The Git release tag is `v0.1`; the JitPack dependency version is `0.1`.
 
 ---
 
@@ -102,7 +115,7 @@ See [`glass/.../Glass.md`](glass/src/main/java/com/builditcode/glass/Glass.md) f
 
 ## Sample app
 
-The `:app` module in this repo is a showcase — a full-bleed background image sampled through an auto-floating figure-8 glass orb, a layered glass panel, and a row of filter presets comparing `Blur`, `Frost`, and `Lens` side by side. Open it in Android Studio and run on a device or emulator.
+The `:app` module in this repo is a verification app for the capture paths: initial hardware image capture, a moving glass card over a static source, a static glass card over a moving source, and a moving card over a moving source. Open it in Android Studio and run on a device or emulator.
 
 ---
 
@@ -111,7 +124,8 @@ The `:app` module in this repo is a showcase — a full-bleed background image s
 - **Min SDK:** 24
 - **Compose BOM:** 2026.02.01+ (tested)
 - **Kotlin:** 2.2+
-- **Best experience:** API 33+ for the full AGSL shader. API 31–32 falls back to hardware `RenderEffect` blur. API 24–30 uses a CPU Stack Blur.
+- **Best experience:** API 33+ for the full AGSL shader. API 31–32 uses hardware `RenderEffect` blur over the captured snapshot. API 24–30 uses a CPU Stack Blur.
+- **Hardware content:** Compose-rendered hardware bitmaps are supported automatically; no caller-provided hardware flag is required.
 
 ---
 
