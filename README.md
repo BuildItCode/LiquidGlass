@@ -107,7 +107,7 @@ For multi-layer setups, `TriLevelLayout` wires up a background â†’ foreground â†
 | Filter | Description |
 |--------|-------------|
 | `BackdropFilter.Blur` | Gaussian blur with optional tint. |
-| `BackdropFilter.Glass` | Frosted glass with refraction, dispersion, and edge rim lighting. |
+| `BackdropFilter.Glass` | Frosted glass with refraction, dispersion, edge rim lighting, and optional tint. |
 
 See [`glass/.../Glass.md`](glass/src/main/java/com/builditcode/glass/Glass.md) for the full parameter reference, layered glass patterns, freeze/resume captures for modal overlays, and performance notes.
 

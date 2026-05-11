@@ -19,6 +19,7 @@ internal val GLASS_SHADER = """
     uniform float refraction;
     uniform float dispersion;
     uniform float edge;
+    uniform float4 tint;
     uniform shader content;
 
     const float AA = 1.5;
@@ -68,6 +69,8 @@ internal val GLASS_SHADER = """
             float li = abs(dot(n, normalize(float2(-1.0, -1.0))));
             col.rgb += half3(rim * li * edge);
         }
+
+        col.rgb = mix(col.rgb, half3(tint.rgb), half(tint.a));
 
         return col * (1.0 - smoothstep(-AA * 0.5, AA * 0.5, dist));
     }

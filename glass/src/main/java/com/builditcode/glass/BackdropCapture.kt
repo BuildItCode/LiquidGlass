@@ -474,6 +474,7 @@ sealed interface BackdropFilter {
         val refraction: Float = 0.24f,
         val dispersion: Float = 0.2f,
         val edge: Float = 0.18f,
+        val tint: Color = Color.Transparent,
     ) : BackdropFilter {
         val shader: RuntimeShader? by lazy { createGlassShader() }
 
@@ -510,6 +511,7 @@ sealed interface BackdropFilter {
                 s.setFloatUniform("refraction", refraction)
                 s.setFloatUniform("dispersion", dispersion)
                 s.setFloatUniform("edge", edge)
+                s.setFloatUniform("tint", tint.red, tint.green, tint.blue, tint.alpha)
                 lastDensity = density
             }
             if (lastW != w || lastH != h) {

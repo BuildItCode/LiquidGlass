@@ -173,11 +173,12 @@ BackdropFilter.Glass(
     cornerRadiusDp      = 12f,   // must match the shape corner radius for correct edge refraction
     refraction          = 0.15f, // light bending through thick glass
     dispersion          = 0.12f, // chromatic aberration (RGB splitting)
-    edge                = 0.2f   // white rim-light intensity
+    edge                = 0.2f,  // white rim-light intensity
+    tint                = Color.White.copy(alpha = 0.04f)
 )
 ```
 
-**API compatibility:** Full AGSL shader on API 33+. The AGSL path uses blur, refraction, dispersion, and edge. API 24–32 uses the legacy CPU bitmap fallback with blur, refraction, and edge distortion; dispersion is AGSL-only.
+**API compatibility:** Full AGSL shader on API 33+. The AGSL path uses blur, refraction, dispersion, edge, and tint. API 24–32 uses the legacy CPU bitmap fallback with blur, refraction, edge distortion, and tint; dispersion is AGSL-only.
 
 > `cornerRadiusDp` should match the `dp` value used in the `shape` passed to `layeredBackdropCapture` for physically accurate edge refraction. The shader compiles lazily on first draw and is cached on the `Glass` instance, so allocating a new `Glass()` per recomposition is cheap.
 

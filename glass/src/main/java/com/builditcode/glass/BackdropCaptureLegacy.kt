@@ -90,6 +90,7 @@ internal object BackdropCaptureLegacy : BackdropCaptureBackend {
             )
             drawBitmapInCaptureRegion(glassBitmap.asImageBitmap(), result)
         }
+        drawRect(glass.tint)
     }
 
     private fun ContentDrawScope.drawBlur(
