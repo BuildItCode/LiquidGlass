@@ -106,7 +106,7 @@ private fun VerificationApp() {
     key(scenario) {
         TriLevelLayout(
             modifier = Modifier.fillMaxSize(),
-            scaleFactor = 0.8f,
+            scaleFactor = 0.6f,
             debounceMs = 32L,
             background = {
                 when (scenario) {
@@ -134,7 +134,7 @@ private fun HardwareImageBackdrop(
     AsyncImage(
         model = ImageRequest.Builder(LocalContext.current)
             .data(R.drawable.img_test)
-            .allowHardware(true)
+            .allowHardware(false)
             .build(),
         contentDescription = null,
         contentScale = ContentScale.Crop,
@@ -306,7 +306,7 @@ private fun VerificationGlassCard(
             .layeredBackdropCapture(
                 layerName = "background",
                 shape = shape,
-                filter = BackdropFilter.Glass(blurRadiusIntensity = 2f)
+                filter = BackdropFilter.Glass(blurRadiusIntensity = 6f)
             )
             .glassBorder(
                 shape = shape,

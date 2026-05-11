@@ -10,9 +10,9 @@ Part of the **Lucid** design system.
 
 - **Live sampling** — glass surfaces capture and refract the pixels under them, including scroll, animation, and moving capture regions.
 - **Hardware-backed content** — sources automatically promote from the low-overhead software capture path to a hardware snapshot path when the scene contains hardware-accelerated content such as hardware bitmaps.
-- **Physically-based shader** — AGSL glass effect with refraction, chromatic dispersion, lens curvature, and edge rim lighting.
+- **Physically-based shader** — AGSL glass effect with refraction, chromatic dispersion, and edge rim lighting.
 - **Layered glass** — named source layers let you stack glass over glass (e.g. a modal sheet over a glass card over scroll content).
-- **API 24+** — full AGSL shader on API 34+, CPU glass fallback on API 31–33, CPU Stack Blur fallback on API 24–30.
+- **API 24+** — GPU layer capture with AGSL glass on API 33+, legacy CPU bitmap fallback with refraction and edge distortion on API 24–32.
 - **Zero recomposition overhead** — implemented as `Modifier.Node`, not composables.
 - **Sweep-gradient glass border** — optional `Modifier.glassBorder` for the rim-of-glass highlight you get when light catches a physical edge.
 
@@ -107,7 +107,7 @@ For multi-layer setups, `TriLevelLayout` wires up a background → foreground �
 | Filter | Description |
 |--------|-------------|
 | `BackdropFilter.Blur` | Gaussian blur with optional tint. |
-| `BackdropFilter.Glass` | Frosted glass with refraction, dispersion, lens curvature, edge rim lighting, and tint. |
+| `BackdropFilter.Glass` | Frosted glass with refraction, dispersion, and edge rim lighting. |
 
 See [`glass/.../Glass.md`](glass/src/main/java/com/builditcode/glass/Glass.md) for the full parameter reference, layered glass patterns, freeze/resume captures for modal overlays, and performance notes.
 
@@ -124,7 +124,7 @@ The `:app` module in this repo is a verification app for the capture paths: init
 - **Min SDK:** 24
 - **Compose BOM:** 2026.02.01+ (tested)
 - **Kotlin:** 2.2+
-- **Best experience:** API 34+ for the full AGSL shader. API 31–33 uses a CPU glass fallback for refraction/dispersion/rim effects and keeps plain blur on the hardware `RenderEffect` path. API 24–30 uses CPU Stack Blur.
+- **Best experience:** API 33+ for GPU layer capture, platform blur, and full AGSL glass. API 24–32 uses the legacy CPU bitmap fallback.
 - **Hardware content:** Compose-rendered hardware bitmaps are supported automatically; no caller-provided hardware flag is required.
 
 ---
