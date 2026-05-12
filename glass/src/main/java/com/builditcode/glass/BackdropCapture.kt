@@ -178,6 +178,7 @@ internal val backdropCaptureBackend: BackdropCaptureBackend =
 
 internal interface BackdropCaptureBackend {
     val createsFallbackBitmap: Boolean
+    val retainsHardwareCaptureLayer: Boolean
 
     fun usesHardwareLayerForSource(state: BackdropState): Boolean
 
@@ -197,6 +198,37 @@ internal interface BackdropCaptureBackend {
         cpuBlurCache: CpuBlurCache
     )
 }
+
+private val recordingBackdropSources = ThreadLocal<ArrayDeque<String>>()
+private val drawingBackdropSources = ThreadLocal<ArrayDeque<String>>()
+
+private inline fun <T> recordingBackdropSource(layerName: String, block: () -> T): T {
+    val stack = recordingBackdropSources.get() ?: ArrayDeque<String>().also(recordingBackdropSources::set)
+    stack.addLast(layerName)
+    return try {
+        block()
+    } finally {
+        stack.removeLast()
+        if (stack.isEmpty()) recordingBackdropSources.remove()
+    }
+}
+
+private fun isRecordingAnyBackdropSource(): Boolean =
+    recordingBackdropSources.get()?.isNotEmpty() == true
+
+private inline fun <T> drawingBackdropSource(layerName: String, block: () -> T): T {
+    val stack = drawingBackdropSources.get() ?: ArrayDeque<String>().also(drawingBackdropSources::set)
+    stack.addLast(layerName)
+    return try {
+        block()
+    } finally {
+        stack.removeLast()
+        if (stack.isEmpty()) drawingBackdropSources.remove()
+    }
+}
+
+private fun isDrawingBackdropSource(layerName: String): Boolean =
+    drawingBackdropSources.get()?.contains(layerName) == true
 
 // =============================================================================
 // PUBLIC MODIFIERS
@@ -244,7 +276,11 @@ private class BackdropSourceNode(
     private var hardwareCaptureLayer: GraphicsLayer? = null
 
     fun updateLayerName(newName: String) {
-        if (layerName != newName) { layerName = newName; cachedState = null }
+        if (layerName != newName) {
+            cachedState?.clearSourceCapture()
+            layerName = newName
+            cachedState = null
+        }
     }
 
     override fun onGloballyPositioned(coordinates: LayoutCoordinates) {
@@ -254,6 +290,14 @@ private class BackdropSourceNode(
     }
 
     override fun onDetach() {
+        cachedState?.clearSourceCapture()
+        hardwareCaptureLayer?.let { requireGraphicsContext().releaseGraphicsLayer(it) }
+        hardwareCaptureLayer = null
+        cachedState = null
+    }
+
+    override fun onReset() {
+        cachedState?.clearSourceCapture()
         hardwareCaptureLayer?.let { requireGraphicsContext().releaseGraphicsLayer(it) }
         hardwareCaptureLayer = null
         cachedState = null
@@ -281,29 +325,58 @@ private class BackdropSourceNode(
         if (w > 0 && h > 0 && state.shouldCapture) {
             try {
                 if (backdropCaptureBackend.usesHardwareLayerForSource(state)) {
-                    val layer = hardwareCaptureLayer ?: requireGraphicsContext()
-                        .createGraphicsLayer()
-                        .also { hardwareCaptureLayer = it }
-                    val captureSize = state.scaledSize(w, h)
-                    val outerScope = this
+                    val graphicsContext = requireGraphicsContext()
+                    state.setHardwareLayerReleaser { graphicsContext.releaseGraphicsLayer(it) }
 
-                    drawContent()
-                    layer.record(size = captureSize) {
-                        scale(
-                            scaleX = state.captureScaleFactor,
-                            scaleY = state.captureScaleFactor,
-                            pivot = Offset.Zero
-                        ) {
-                            outerScope.drawContent()
+                    val outerScope = this
+                    drawingBackdropSource(layerName) {
+                        drawContent()
+                    }
+
+                    val retainLayer = backdropCaptureBackend.retainsHardwareCaptureLayer
+                    val layer = if (retainLayer) {
+                        graphicsContext.createGraphicsLayer()
+                    } else {
+                        hardwareCaptureLayer ?: graphicsContext
+                            .createGraphicsLayer()
+                            .also { hardwareCaptureLayer = it }
+                    }
+                    val captureSize = state.scaledSize(w, h)
+                    var published = false
+
+                    try {
+                        layer.record(size = captureSize) {
+                            scale(
+                                scaleX = state.captureScaleFactor,
+                                scaleY = state.captureScaleFactor,
+                                pivot = Offset.Zero
+                            ) {
+                                recordingBackdropSource(layerName) {
+                                    outerScope.drawContent()
+                                }
+                            }
+                        }
+                        backdropCaptureBackend.onHardwareLayerRecorded(
+                            state = state,
+                            layer = layer,
+                            captureSize = captureSize
+                        )
+                        published = true
+                    } finally {
+                        if (retainLayer && !published) {
+                            graphicsContext.releaseGraphicsLayer(layer)
                         }
                     }
-                    backdropCaptureBackend.onHardwareLayerRecorded(state, layer, captureSize)
                 } else {
-                    drawContent()
+                    drawingBackdropSource(layerName) {
+                        drawContent()
+                    }
                     val canvas = picture.beginRecording(w, h)
                     val outerScope = this
                     draw(outerScope, layoutDirection, Canvas(canvas), size) {
-                        outerScope.drawContent()
+                        recordingBackdropSource(layerName) {
+                            outerScope.drawContent()
+                        }
                     }
                     picture.endRecording()
                     state.onPictureRecorded(picture, w, h)
@@ -317,7 +390,6 @@ private class BackdropSourceNode(
         }
     }
 
-    override fun onReset() { cachedState = null }
 }
 
 // =============================================================================
@@ -400,6 +472,12 @@ private class BackdropCaptureNode(
     }
 
     override fun ContentDrawScope.draw() {
+        if (isRecordingAnyBackdropSource()) return
+        if (isDrawingBackdropSource(layerName)) {
+            drawContent()
+            return
+        }
+
         observeReads {
             val state = cachedState
             state?.resultInvalidator
@@ -426,6 +504,7 @@ private class BackdropCaptureNode(
     }
 
     override fun onReset() {
+        cachedState?.unregisterRegion(regionId)
         cachedState = null
         lastPosition = Offset.Unspecified
         lastResult = null
@@ -577,6 +656,7 @@ class BackdropState internal constructor(
 
     private var masterImage: ImageBitmap? = null
     private var masterLayer: GraphicsLayer? = null
+    private var hardwareLayerReleaser: ((GraphicsLayer) -> Unit)? = null
     private var reusableBitmap: Bitmap? = null
 
     private var masterSourceRect: Rect = Rect.Zero
@@ -701,6 +781,7 @@ class BackdropState internal constructor(
         reusableBitmap = null
         masterImage?.safeRecycle()
         masterImage = null
+        masterLayer?.let(::releaseHardwareCaptureLayer)
         masterLayer = null
     }
 
@@ -766,6 +847,46 @@ class BackdropState internal constructor(
         processingJob = job
     }
 
+    internal fun setHardwareLayerReleaser(releaser: (GraphicsLayer) -> Unit) {
+        hardwareLayerReleaser = releaser
+    }
+
+    internal fun clearSourceCapture() {
+        scheduledJob?.cancel()
+        scheduledJob = null
+        processingJob?.cancel()
+        processingJob = null
+        captureRequested = false
+
+        if (regions.isNotEmpty()) {
+            regions.keys.toList().forEach { id ->
+                val region = regions[id] ?: return@forEach
+                region.result?.fallbackBitmap?.safeRecycle()
+                if (region.result != null) {
+                    regions[id] = region.copy(result = null)
+                }
+            }
+        }
+
+        val oldMasterImage = masterImage
+        val oldMasterLayer = masterLayer
+        masterImage = null
+        masterLayer = null
+        masterScaledW = 0
+        masterScaledH = 0
+        masterSourceRect = Rect.Zero
+        reusableBitmap?.safeRecycle()
+        reusableBitmap = null
+        oldMasterImage?.safeRecycle()
+        releaseHardwareCaptureLayerLater(oldMasterLayer)
+
+        resultInvalidator++
+    }
+
+    internal fun releaseHardwareCaptureLayer(layer: GraphicsLayer) {
+        runCatching { hardwareLayerReleaser?.invoke(layer) }
+    }
+
     internal fun applyHardwareImageCapture(
         captured: ImageBitmap,
         session: HardwareCaptureSession
@@ -808,6 +929,7 @@ class BackdropState internal constructor(
         reuseOldMaster: Boolean
     ) {
         val oldMaster = masterImage
+        val oldLayer = masterLayer
         masterImage = masterImg
         masterLayer = null
         masterSourceRect = currentSource
@@ -829,6 +951,7 @@ class BackdropState internal constructor(
         resultInvalidator++
 
         recycleOrReuseOldMaster(oldMaster, reuseOldMaster)
+        releaseHardwareCaptureLayerLater(oldLayer)
         processingJob = null
 
         if (captureRequested) invalidateOrSchedule()
@@ -841,6 +964,7 @@ class BackdropState internal constructor(
         scaledH: Int
     ) {
         val oldMaster = masterImage
+        val oldLayer = masterLayer
         masterImage = null
         masterLayer = layer
         masterSourceRect = currentSource
@@ -862,9 +986,19 @@ class BackdropState internal constructor(
         resultInvalidator++
 
         recycleOrReuseOldMaster(oldMaster, reuseOldMaster = false)
+        if (oldLayer != null && oldLayer !== layer) releaseHardwareCaptureLayerLater(oldLayer)
         processingJob = null
 
         if (captureRequested) invalidateOrSchedule()
+    }
+
+    private fun releaseHardwareCaptureLayerLater(layer: GraphicsLayer?) {
+        if (layer == null) return
+        val releaser = hardwareLayerReleaser ?: return
+        scope.launch(Dispatchers.Main) {
+            delay(96L)
+            runCatching { releaser(layer) }
+        }
     }
 
     private fun beginCapture() {

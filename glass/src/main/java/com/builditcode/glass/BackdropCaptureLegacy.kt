@@ -14,6 +14,7 @@ import kotlin.math.roundToInt
 
 internal object BackdropCaptureLegacy : BackdropCaptureBackend {
     override val createsFallbackBitmap: Boolean = true
+    override val retainsHardwareCaptureLayer: Boolean = false
 
     override fun usesHardwareLayerForSource(state: BackdropState): Boolean =
         state.shouldUseHardwareSnapshot

@@ -1,17 +1,26 @@
 # Glass Backdrop Effect
 
-Part of the Lucid design system. A Jetpack Compose toolkit for real-time frosted glass and blur effects: glass panels sample the live UI behind them — including scrolling content, animated content, moving capture regions, and hardware-backed images — and apply physically-based shader effects with no manual state wiring required.
+Part of the Lucid design system. A Jetpack Compose toolkit for real-time frosted glass and blur effects: glass panels sample the live UI behind them, including scrolling content, animated content, moving capture regions, and hardware-backed images, and apply shader effects with no manual state wiring required.
 
 ## How It Works
 
 The system has two sides:
 
-- **Source** — a `Modifier.Node` that starts with a fast downscaled `Picture` capture and automatically promotes that layer to a `GraphicsLayer` snapshot if Android reports that the scene contains hardware-backed content that cannot be drawn into a software canvas.
-- **Capture** — a `Modifier.Node` that crops the current snapshot to its on-screen region, keeps that crop up to date as the source or capture node moves, and applies blur or glass through the best available path for the current API level.
+- **Source** - a `Modifier.Node` that records the pixels that glass surfaces are allowed to sample.
+- **Capture** - a `Modifier.Node` that crops the current source capture to its on-screen region, keeps that crop up to date as the source or capture node moves, and applies blur or glass through the best available path for the current API level.
 
 Both modifiers are implemented as `Modifier.Node` (no recomposition overhead). Recapture is driven implicitly by the draw phase: any time a source's `draw()` is re-invoked (e.g. its child content scrolls or animates), the source queues a fresh capture after the manager's debounce interval.
 
-Multiple named layers can coexist. A glass card can sample a `"Background"` layer (the scrolling content behind it) and a `"Combined"` layer (the full screen including other glass cards), enabling layered glass-on-glass effects.
+Multiple named layers can coexist. A foreground card can sample a `"Background"` layer, and an overlay sheet can sample a `"Foreground"` layer that contains the background plus non-glass foreground UI.
+
+Capture nodes are intentionally excluded while a source layer is being recorded. Place a glass surface as an overlay sibling of the source it samples, not inside that same source subtree. This avoids self-sampling feedback loops and keeps hardware-rendered scenes stable.
+
+### Capture backends
+
+| API level | Capture path | Effect path |
+|-----------|--------------|-------------|
+| API 33+ | Retained `GraphicsLayer` source capture kept on the GPU. | Platform `RenderEffect` blur and AGSL Glass shader. |
+| API 24-32 | Downscaled `Picture` bitmap capture for software-renderable content; automatic hardware snapshot fallback when software capture cannot draw the source. | CPU blur plus CPU refraction/edge/tint fallback for Glass. |
 
 ---
 
@@ -46,25 +55,38 @@ Box(
 }
 ```
 
-Recapture is driven by Compose's draw phase: any redraw of the source subtree (a scrolling `LazyColumn`, an animating child, a state change) re-runs the source's `draw()`, which queues a new downscaled capture after the manager's debounce interval. You don't need to pass `LazyListState` or any explicit triggers — if the pixels under the source change, a recapture is queued.
+Recapture is driven by Compose's draw phase: any redraw of the source subtree (a scrolling `LazyColumn`, an animating child, a state change) re-runs the source's `draw()`, which queues a fresh capture after the manager's debounce interval. You don't need to pass `LazyListState` or any explicit triggers. If the pixels under the source change, a recapture is queued.
 
-If the source contains hardware-backed content such as a Compose image decoded with a hardware bitmap, the source promotes itself to the hardware snapshot path automatically. The caller does not need to mark a source as "hardware".
+If the source contains hardware-backed content such as a Compose image decoded with a hardware bitmap, it is supported automatically. API 33+ keeps the source capture as a GPU layer. API 24-32 starts with the lower-overhead software bitmap path and promotes to a hardware snapshot only when Android reports that the content cannot be drawn into a software canvas.
 
 ### 3. Add glass panels
 
 Apply `.layeredBackdropCapture(...)` to the composable you want to render as glass:
 
 ```kotlin
-Box(
-    modifier = Modifier
-        .size(200.dp)
-        .layeredBackdropCapture(
-            layerName = "Background",
-            shape     = RoundedCornerShape(20.dp),
-            filter    = BackdropFilter.Glass(),
-        )
-)
+Box(Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .layeredBackdropSource("Background")
+    ) {
+        LazyColumn { /* source content */ }
+    }
+
+    Box(
+        modifier = Modifier
+            .size(200.dp)
+            .align(Alignment.Center)
+            .layeredBackdropCapture(
+                layerName = "Background",
+                shape     = RoundedCornerShape(20.dp),
+                filter    = BackdropFilter.Glass(),
+            )
+    )
+}
 ```
+
+The capture panel is a sibling overlay of the source it samples. Do not put a capture node inside the same source subtree it samples.
 
 ---
 
@@ -93,9 +115,11 @@ fun rememberBackdropManager(
 fun Modifier.layeredBackdropSource(layerName: String): Modifier
 ```
 
-Marks this composable as the pixel source for the named layer. The node intercepts `ContentDrawScope.draw()`, draws content to screen normally, and then — if the manager has pending capture requests — records the same draw into a downscaled snapshot. The source starts on the lower-overhead software path and automatically promotes itself to the hardware-capable `GraphicsLayer` snapshot path if Android reports that the content cannot be drawn into a software canvas.
+Marks this composable as the pixel source for the named layer. The node intercepts `ContentDrawScope.draw()`, draws content to screen normally, and then, if the manager has pending capture requests, records the same draw into the active capture backend.
 
 The on-screen draw always runs first, so a slow or skipped capture never drops a frame of normal rendering.
+
+On API 33+, the source is captured into a retained `GraphicsLayer` and consumed by GPU effects. On API 24-32, software-renderable sources use a downscaled bitmap path; hardware-backed content automatically falls back to a hardware snapshot and is then processed through the legacy bitmap effect path.
 
 ---
 
@@ -113,12 +137,14 @@ fun Modifier.layeredBackdropCapture(
 
 Samples the named source layer at this composable's screen position and renders the chosen filter through it.
 
+The capture should be placed above, or as a sibling of, the source it samples. Captures inside the same source subtree are ignored while that source is being recorded so the source cannot recursively sample itself.
+
 | Parameter | Description |
 |-----------|-------------|
 | `layerName` | Must match a `layeredBackdropSource` layer name. |
 | `shape` | Clip shape for the blur region. |
 | `padding` | Inset the blur region if needed. |
-| `filter` | The visual effect to apply — `Blur` or `Glass`. |
+| `filter` | The visual effect to apply: `Blur` or `Glass`. |
 | `autoInvalidateOnMove` | When `true`, moving this composable triggers a refresh of other layers. Keeps layered effects in sync during drag. |
 
 ---
@@ -140,8 +166,8 @@ Draws a sweep-gradient border with gaps at the top-right and bottom-left corners
 
 | Parameter | Description |
 |-----------|-------------|
-| `gapSize` | Size of the transparent gaps as a fraction of the sweep (0–0.4). |
-| `softness` | Feathering width of gap edges (0–0.1). |
+| `gapSize` | Size of the transparent gaps as a fraction of the sweep (0-0.4). |
+| `softness` | Feathering width of gap edges (0-0.1). |
 | `overlayBrush` | Optional brush drawn over the content (e.g. a white gloss gradient). |
 
 ---
@@ -150,26 +176,26 @@ Draws a sweep-gradient border with gaps at the top-right and bottom-left corners
 
 ### `BackdropFilter.Blur`
 
-Standard Gaussian blur.
+Standard backdrop blur with optional tint.
 
 ```kotlin
 BackdropFilter.Blur(
-    blurRadiusIntensity = 5f,            // 0.0–10.0
+    blurRadiusIntensity = 5f,            // 0.0-10.0
     tint = Color.White.copy(alpha = 0.05f)
 )
 ```
 
-**API compatibility:** Full hardware blur on API 33+. API 24–32 uses the legacy CPU Stack Blur fallback.
+**API compatibility:** Platform `RenderEffect` blur on API 33+. API 24-32 uses the legacy CPU Stack Blur fallback.
 
 ---
 
 ### `BackdropFilter.Glass`
 
-Full physically-based frosted glass shader with refraction, chromatic dispersion, and edge rim lighting.
+Frosted glass with blur, refraction, edge rim lighting, and optional tint. API 33+ also supports chromatic dispersion through the AGSL shader.
 
 ```kotlin
 BackdropFilter.Glass(
-    blurRadiusIntensity = 3f,    // base blur, 0.0–10.0          (default)
+    blurRadiusIntensity = 3f,    // base blur, 0.0-10.0          (default)
     cornerRadiusDp      = 12f,   // must match the shape corner radius for correct edge refraction
     refraction          = 0.15f, // light bending through thick glass
     dispersion          = 0.12f, // chromatic aberration (RGB splitting)
@@ -178,9 +204,9 @@ BackdropFilter.Glass(
 )
 ```
 
-**API compatibility:** Full AGSL shader on API 33+. The AGSL path uses blur, refraction, dispersion, edge, and tint. API 24–32 uses the legacy CPU bitmap fallback with blur, refraction, edge distortion, and tint; dispersion is AGSL-only.
+**API compatibility:** Full AGSL shader on API 33+. The AGSL path uses blur, refraction, dispersion, edge, and tint. API 24-32 uses the legacy CPU bitmap fallback with blur, refraction, edge distortion, and tint; dispersion is AGSL-only.
 
-> `cornerRadiusDp` should match the `dp` value used in the `shape` passed to `layeredBackdropCapture` for physically accurate edge refraction. The shader compiles lazily on first draw and is cached on the `Glass` instance, so allocating a new `Glass()` per recomposition is cheap.
+> `cornerRadiusDp` should match the `dp` value used in the `shape` passed to `layeredBackdropCapture` for physically accurate edge refraction. The shader compiles lazily on first draw and is cached on the `Glass` instance, so prefer remembering stable filter instances when the parameters are not changing.
 
 ---
 
@@ -193,7 +219,7 @@ val backdropManager = rememberBackdropManager(defaultDebounceMs = 16)
 CompositionLocalProvider(LocalBackdropLayerManager provides backdropManager) {
     Box(modifier = Modifier.fillMaxSize()) {
 
-        // Source layer — the scrollable background
+        // Source layer: the scrollable background
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -204,24 +230,25 @@ CompositionLocalProvider(LocalBackdropLayerManager provides backdropManager) {
                     // content items...
                 }
             }
+        }
 
-            // Glass card sampling the scrollable background
-            Box(
-                modifier = Modifier
-                    .size(220.dp)
-                    .glassBorder(
-                        shape       = RoundedCornerShape(20.dp),
-                        borderColor = Color.White,
-                        borderWidth = 1.dp
-                    )
-                    .layeredBackdropCapture(
-                        layerName = "Background",
-                        shape     = RoundedCornerShape(20.dp),
-                        filter    = BackdropFilter.Glass(cornerRadiusDp = 20f)
-                    )
-            ) {
-                Text("Hello glass")
-            }
+        // Overlay sibling sampling the background source
+        Box(
+            modifier = Modifier
+                .size(220.dp)
+                .align(Alignment.Center)
+                .glassBorder(
+                    shape       = RoundedCornerShape(20.dp),
+                    borderColor = Color.White,
+                    borderWidth = 1.dp
+                )
+                .layeredBackdropCapture(
+                    layerName = "Background",
+                    shape     = RoundedCornerShape(20.dp),
+                    filter    = BackdropFilter.Glass(cornerRadiusDp = 20f)
+                )
+        ) {
+            Text("Hello glass")
         }
     }
 }
@@ -229,33 +256,38 @@ CompositionLocalProvider(LocalBackdropLayerManager provides backdropManager) {
 
 ---
 
-## Layered Glass (Glass Over Glass)
+## Layered Sources
 
-To have one glass card sample another glass card's output, use a second source layer that wraps both:
+Use named source layers when foreground and overlay surfaces need to sample different parts of the scene. Keep each glass capture outside the source it samples:
 
 ```kotlin
-Box(
-    modifier = Modifier
-        .fillMaxSize()
-        .layeredBackdropSource("Combined") // captures everything below, including Card 1
-) {
+Box(Modifier.fillMaxSize()) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .layeredBackdropSource("Background") // captures only the scroll content
+            .layeredBackdropSource("Background")
     ) {
         LazyColumn { /* ... */ }
-
-        GlassCard(layerName = "Background") // Card 1 samples the scroll layer
     }
 
-    GlassCard(layerName = "Combined") // Card 2 samples the full scene including Card 1
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .layeredBackdropSource("Foreground")
+    ) {
+        // Foreground source can include background plus non-glass foreground UI.
+        // Capture nodes are omitted from source recordings to prevent feedback.
+        ForegroundControls()
+    }
+
+    GlassCard(layerName = "Background")  // samples scroll content
+    GlassSheet(layerName = "Foreground") // samples background + foreground controls
 }
 ```
 
 ### `LayeredLayout` helper
 
-For nested-layer setups like the one above, the design system ships a small declarative wrapper in `LayeredLayout.kt` that flattens the nesting:
+For nested-layer setups like the one above, the design system ships a small declarative wrapper in `LayeredLayout.kt` that flattens the source composition:
 
 ```kotlin
 LayeredLayout(modifier = Modifier.fillMaxSize()) {
@@ -263,39 +295,46 @@ LayeredLayout(modifier = Modifier.fillMaxSize()) {
         Box(Modifier.fillMaxSize().layeredBackdropSource("Background")) {
             previous()             // nothing on the very first layer
             LazyColumn { /* ... */ }
-            GlassCard(layerName = "Background")
         }
     }
-    layer("Combined") { previous ->
-        Box(Modifier.fillMaxSize().layeredBackdropSource("Combined")) {
+    layer("Foreground") { previous ->
+        Box(Modifier.fillMaxSize().layeredBackdropSource("Foreground")) {
             previous()             // renders the Background layer beneath
-            GlassCard(layerName = "Combined")
+            ForegroundControls()
+        }
+    }
+    layer("Overlay") { previous ->
+        Box(Modifier.fillMaxSize()) {
+            previous()
+            GlassCard(layerName = "Background")
+            GlassSheet(layerName = "Foreground")
         }
     }
 }
 ```
 
-Each `layer { previous -> ... }` block receives the composed tree of all previously declared layers and is responsible for placing it inside its own `layeredBackdropSource`. The result is the same as hand-nesting the boxes, but easier to read when you have three or more layers.
+Each `layer { previous -> ... }` block receives the composed tree of all previously declared layers. Source layers should contain the pixels to be sampled; glass captures should live in a later overlay layer.
 
 ---
 
-## Freezing Captures (Modal Overlays)
+## Freezing Captures
 
-When a modal sheet, dialog, or popup opens *over* a glass surface, you usually want it to render against a snapshot of the screen taken **before** the overlay appeared — otherwise the overlay's own content gets sampled into its own blur and the effect collapses into a feedback loop.
+Most overlays should be modeled as a later layer that samples a source beneath it; in that setup, updates can stay live while the overlay is open.
 
-`BackdropLayerManager` exposes two methods for this:
+If you intentionally want a modal sheet, dialog, or popup to render against a static snapshot taken before it appeared, `BackdropLayerManager` exposes two methods:
+
 
 ```kotlin
 val manager = LocalBackdropLayerManager.current!!
 
-// When the overlay opens:
+// When the overlay opens and you want a frozen backdrop:
 manager.stopUpdates()
 
 // When the overlay dismisses:
 manager.startUpdates()  // resumes captures and triggers a one-shot refresh
 ```
 
-While `shouldUpdate` is `false`, the source nodes short-circuit snapshot recording and `BackdropState.requestCapture` is a no-op. Capture nodes keep reading the most recent `CaptureResult`, so existing glass surfaces stay visually correct against the frozen snapshot.
+While `shouldUpdate` is `false`, source nodes skip snapshot recording. Capture nodes keep reading the most recent `CaptureResult`, so existing glass surfaces stay visually stable against the frozen snapshot.
 
 ---
 
@@ -303,11 +342,12 @@ While `shouldUpdate` is `false`, the source nodes short-circuit snapshot recordi
 
 - **Scale factor**: The single biggest lever. `0.4f` (default) gives a good blur with ~6× fewer pixels to process than full resolution. Drop to `0.3f` for more aggressive savings on heavy scenes.
 - **Debounce**: `32ms` is the manager default (~30 fps). Drop to `16ms` for 60 fps recapture if the background animates continuously, or raise it if the background changes rarely.
-- **Adaptive capture**: Software-renderable layers stay on the lower-overhead `Picture` path with bitmap reuse. Layers that contain hardware-backed content promote once to the `GraphicsLayer` snapshot path, without a caller-provided flag.
-- **Hardware snapshots**: The hardware path is meant for Compose-rendered hardware content such as hardware bitmaps. Keep the source subtree scoped to the pixels that glass panels actually need; capturing an entire launcher page at high scale during continuous animation is still real work.
-- **API 24-32 fallback**: `BackdropFilter.Blur` and `BackdropFilter.Glass` both use the legacy CPU bitmap path. Legacy Glass keeps blur, refraction, and edge distortion. API 33+ uses the GPU layer path with platform blur and AGSL glass.
-- **Shader compilation**: `BackdropFilter.Glass` compiles its AGSL shader lazily on first draw and caches it on the instance, so allocating a new `Glass()` per recomposition is cheap.
-- **`autoInvalidateOnMove`**: When a glass capture node moves on screen, it invalidates *other* layers (excluding its own) so layered glass-on-glass stays in sync during drag. Disable it if you have many capture nodes that move independently and you don't need layered effects to track them.
+- **API 33+ capture**: Sources are recorded into retained GPU `GraphicsLayer`s, then filtered with platform blur and AGSL. This avoids CPU bitmap copies for hardware-backed images and videos.
+- **API 24-32 fallback**: Software-renderable layers use the lower-overhead `Picture` bitmap path with bitmap reuse. If the source contains hardware-backed content, the layer promotes to a hardware snapshot and then uses the same legacy bitmap effect path.
+- **Legacy effects**: `BackdropFilter.Blur` and `BackdropFilter.Glass` both use CPU processing on API 24-32. Legacy Glass keeps blur, refraction, edge distortion, and tint, but dispersion is AGSL-only.
+- **Source scope**: Keep the source subtree scoped to the pixels that glass panels actually need. Capturing an entire launcher page at high scale during continuous animation is still real work, even on API 33+.
+- **Shader compilation**: `BackdropFilter.Glass` compiles its AGSL shader lazily on first draw and caches it on the filter instance. Prefer stable remembered filter instances when parameters are not changing.
+- **`autoInvalidateOnMove`**: When a glass capture node moves on screen, it invalidates *other* layers (excluding its own) so layered sources stay in sync during drag. Disable it if you have many capture nodes that move independently and you do not need other layers to track them.
 - **Overscroll**: Disable the stretch/glow overscroll effect when using glass over a `LazyColumn` to avoid visual artifacts: wrap the list in `CompositionLocalProvider(LocalOverscrollFactory provides null)`.
 - **Drag state**: Use `mutableFloatStateOf` for drag offsets (`offsetX`, `offsetY`) to avoid boxing `Float` on every pointer event.
-- **Modal overlays**: Always pair `manager.stopUpdates()` / `startUpdates()` with the open/close lifecycle of any sheet that sits over a glass surface — see *Freezing Captures*.
+- **Modal overlays**: Put modal glass in a later overlay layer that samples the source beneath it. Use `manager.stopUpdates()` / `startUpdates()` only when you intentionally want a frozen backdrop.
