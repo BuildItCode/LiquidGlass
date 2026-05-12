@@ -131,7 +131,20 @@ private fun VerificationApp() {
                     VerificationScenario.BottomSheet -> AnimatedBackdrop()
                 }
             },
-            foreground = {},
+            foreground = {
+                if (scenario == VerificationScenario.BottomSheet) {
+                    Box(Modifier.fillMaxSize()) {
+                        VerificationGlassCard(
+                            scenario = VerificationScenario.BottomSheet,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(start = 24.dp, end = 24.dp, bottom = 72.dp),
+                            title = "Foreground glass",
+                            caption = "Captured by the modal above"
+                        )
+                    }
+                }
+            },
             overlay = {
                 VerificationOverlay(
                     scenario = scenario,
@@ -395,7 +408,7 @@ private fun VerificationBottomSheet(
             .fillMaxWidth()
             .height(430.dp)
             .layeredBackdropCapture(
-                layerName = "background",
+                layerName = "foreground",
                 shape = shape,
                 filter = BackdropFilter.Glass(
                     cornerRadiusDp = 34f,

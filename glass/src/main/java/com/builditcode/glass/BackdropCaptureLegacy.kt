@@ -24,8 +24,7 @@ internal object BackdropCaptureLegacy : BackdropCaptureBackend {
     override fun onHardwareLayerRecorded(
         state: BackdropState,
         layer: GraphicsLayer,
-        captureSize: IntSize,
-        preferImageSnapshot: Boolean
+        captureSize: IntSize
     ) {
         val session = state.beginHardwareCapture(captureSize)
         state.setHardwareProcessingJob(
