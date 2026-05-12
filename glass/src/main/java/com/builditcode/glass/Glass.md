@@ -13,7 +13,7 @@ Both modifiers are implemented as `Modifier.Node` (no recomposition overhead). R
 
 Multiple named layers can coexist. A foreground card can sample a `"Background"` layer, and an overlay sheet can sample a `"Foreground"` layer that contains the background plus non-glass foreground UI.
 
-Capture nodes are intentionally excluded while a source layer is being recorded. Place a glass surface as an overlay sibling of the source it samples, not inside that same source subtree. This avoids self-sampling feedback loops and keeps hardware-rendered scenes stable.
+Glass surfaces can be captured by higher source layers, so blur-over-blur and glass-over-glass layouts are supported. The only blocked case is true same-source feedback, where a capture tries to sample the source currently recording itself.
 
 ### Capture backends
 
@@ -86,7 +86,7 @@ Box(Modifier.fillMaxSize()) {
 }
 ```
 
-The capture panel is a sibling overlay of the source it samples. Do not put a capture node inside the same source subtree it samples.
+The capture panel can be captured by a later source layer for blur-over-blur effects. Do not make a capture sample the same source that currently contains it; use a lower source layer for the pixels behind it and a higher source layer for panels above it.
 
 ---
 
@@ -137,7 +137,7 @@ fun Modifier.layeredBackdropCapture(
 
 Samples the named source layer at this composable's screen position and renders the chosen filter through it.
 
-The capture should be placed above, or as a sibling of, the source it samples. Captures inside the same source subtree are ignored while that source is being recorded so the source cannot recursively sample itself.
+The capture should sample a source below it. Captures can be included in later source layers, but a capture inside the same source it samples is rendered without recursively sampling itself.
 
 | Parameter | Description |
 |-----------|-------------|
@@ -256,9 +256,9 @@ CompositionLocalProvider(LocalBackdropLayerManager provides backdropManager) {
 
 ---
 
-## Layered Sources
+## Layered Glass
 
-Use named source layers when foreground and overlay surfaces need to sample different parts of the scene. Keep each glass capture outside the source it samples:
+Use named source layers when foreground and overlay surfaces need to sample different parts of the scene, including already-rendered glass:
 
 ```kotlin
 Box(Modifier.fillMaxSize()) {
@@ -275,13 +275,12 @@ Box(Modifier.fillMaxSize()) {
             .fillMaxSize()
             .layeredBackdropSource("Foreground")
     ) {
-        // Foreground source can include background plus non-glass foreground UI.
-        // Capture nodes are omitted from source recordings to prevent feedback.
+        // Foreground source includes background plus this glass card.
+        GlassCard(layerName = "Background")
         ForegroundControls()
     }
 
-    GlassCard(layerName = "Background")  // samples scroll content
-    GlassSheet(layerName = "Foreground") // samples background + foreground controls
+    GlassSheet(layerName = "Foreground") // samples background + glass card + controls
 }
 ```
 
@@ -300,20 +299,20 @@ LayeredLayout(modifier = Modifier.fillMaxSize()) {
     layer("Foreground") { previous ->
         Box(Modifier.fillMaxSize().layeredBackdropSource("Foreground")) {
             previous()             // renders the Background layer beneath
+            GlassCard(layerName = "Background")
             ForegroundControls()
         }
     }
     layer("Overlay") { previous ->
         Box(Modifier.fillMaxSize()) {
             previous()
-            GlassCard(layerName = "Background")
             GlassSheet(layerName = "Foreground")
         }
     }
 }
 ```
 
-Each `layer { previous -> ... }` block receives the composed tree of all previously declared layers. Source layers should contain the pixels to be sampled; glass captures should live in a later overlay layer.
+Each `layer { previous -> ... }` block receives the composed tree of all previously declared layers. A glass surface should sample a lower layer, and a later layer can then capture that already-rendered glass surface.
 
 ---
 

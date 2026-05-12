@@ -33,9 +33,15 @@ internal object BackdropCaptureApi33 : BackdropCaptureBackend {
     override fun onHardwareLayerRecorded(
         state: BackdropState,
         layer: GraphicsLayer,
-        captureSize: IntSize
+        captureSize: IntSize,
+        preferImageSnapshot: Boolean
     ) {
         val session = state.beginHardwareCapture(captureSize)
+        if (preferImageSnapshot) {
+            publishImageSnapshot(state, layer, session)
+            return
+        }
+
         val ownsLayer = AtomicBoolean(true)
 
         fun releaseOwnedLayer() {
@@ -52,6 +58,42 @@ internal object BackdropCaptureApi33 : BackdropCaptureBackend {
                 releaseOwnedLayer()
                 throw error
             } catch (error: Exception) {
+                releaseOwnedLayer()
+                state.onHardwareCaptureFailed(error, session)
+            }
+        }
+        job.invokeOnCompletion { error ->
+            if (error is CancellationException) releaseOwnedLayer()
+        }
+        state.setHardwareProcessingJob(job)
+    }
+
+    private fun publishImageSnapshot(
+        state: BackdropState,
+        layer: GraphicsLayer,
+        session: BackdropState.HardwareCaptureSession
+    ) {
+        val ownsLayer = AtomicBoolean(true)
+
+        fun releaseOwnedLayer() {
+            if (ownsLayer.getAndSet(false)) {
+                state.releaseHardwareCaptureLayer(layer)
+            }
+        }
+
+        val job = state.captureScope.launch(Dispatchers.Main) {
+            var captured: ImageBitmap? = null
+            try {
+                captured = layer.toImageBitmap()
+                state.applyHardwareImageCapture(captured, session)
+                captured = null
+                releaseOwnedLayer()
+            } catch (error: CancellationException) {
+                captured?.safeRecycle()
+                releaseOwnedLayer()
+                throw error
+            } catch (error: Exception) {
+                captured?.safeRecycle()
                 releaseOwnedLayer()
                 state.onHardwareCaptureFailed(error, session)
             }

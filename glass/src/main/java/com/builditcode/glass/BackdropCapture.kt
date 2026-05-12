@@ -187,7 +187,8 @@ internal interface BackdropCaptureBackend {
     fun onHardwareLayerRecorded(
         state: BackdropState,
         layer: GraphicsLayer,
-        captureSize: IntSize
+        captureSize: IntSize,
+        preferImageSnapshot: Boolean
     )
 
     fun ContentDrawScope.drawCapture(
@@ -199,12 +200,18 @@ internal interface BackdropCaptureBackend {
     )
 }
 
-private val recordingBackdropSources = ThreadLocal<ArrayDeque<String>>()
+private class BackdropRecordingFrame(
+    val layerName: String,
+    var renderedCapture: Boolean = false
+)
+
+private val recordingBackdropSources = ThreadLocal<ArrayDeque<BackdropRecordingFrame>>()
 private val drawingBackdropSources = ThreadLocal<ArrayDeque<String>>()
 
 private inline fun <T> recordingBackdropSource(layerName: String, block: () -> T): T {
-    val stack = recordingBackdropSources.get() ?: ArrayDeque<String>().also(recordingBackdropSources::set)
-    stack.addLast(layerName)
+    val stack = recordingBackdropSources.get()
+        ?: ArrayDeque<BackdropRecordingFrame>().also(recordingBackdropSources::set)
+    stack.addLast(BackdropRecordingFrame(layerName))
     return try {
         block()
     } finally {
@@ -215,6 +222,16 @@ private inline fun <T> recordingBackdropSource(layerName: String, block: () -> T
 
 private fun isRecordingAnyBackdropSource(): Boolean =
     recordingBackdropSources.get()?.isNotEmpty() == true
+
+private fun isRecordingBackdropSource(layerName: String): Boolean =
+    recordingBackdropSources.get()?.any { it.layerName == layerName } == true
+
+private fun markCurrentRecordingRenderedCapture() {
+    recordingBackdropSources.get()?.lastOrNull()?.renderedCapture = true
+}
+
+private fun currentRecordingRenderedCapture(): Boolean =
+    recordingBackdropSources.get()?.lastOrNull()?.renderedCapture == true
 
 private inline fun <T> drawingBackdropSource(layerName: String, block: () -> T): T {
     val stack = drawingBackdropSources.get() ?: ArrayDeque<String>().also(drawingBackdropSources::set)
@@ -343,6 +360,7 @@ private class BackdropSourceNode(
                     }
                     val captureSize = state.scaledSize(w, h)
                     var published = false
+                    var recordedFilteredContent = false
 
                     try {
                         layer.record(size = captureSize) {
@@ -353,13 +371,15 @@ private class BackdropSourceNode(
                             ) {
                                 recordingBackdropSource(layerName) {
                                     outerScope.drawContent()
+                                    recordedFilteredContent = currentRecordingRenderedCapture()
                                 }
                             }
                         }
                         backdropCaptureBackend.onHardwareLayerRecorded(
                             state = state,
                             layer = layer,
-                            captureSize = captureSize
+                            captureSize = captureSize,
+                            preferImageSnapshot = recordedFilteredContent
                         )
                         published = true
                     } finally {
@@ -472,10 +492,18 @@ private class BackdropCaptureNode(
     }
 
     override fun ContentDrawScope.draw() {
-        if (isRecordingAnyBackdropSource()) return
+        if (isRecordingBackdropSource(layerName)) {
+            drawContent()
+            return
+        }
+
         if (isDrawingBackdropSource(layerName)) {
             drawContent()
             return
+        }
+
+        if (isRecordingAnyBackdropSource()) {
+            markCurrentRecordingRenderedCapture()
         }
 
         observeReads {
