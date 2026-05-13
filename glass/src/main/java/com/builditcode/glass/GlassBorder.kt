@@ -19,6 +19,20 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.Dp
 import kotlin.math.atan2
 
+/**
+ * Draws the decorative rim/edge treatment used by glass surfaces.
+ *
+ * This modifier only draws the border highlight. It does not capture, blur, or distort
+ * content behind the composable. Pair it with [layeredBackdropCapture] when the surface
+ * also needs a live backdrop effect.
+ *
+ * @param shape Shape whose outline receives the border.
+ * @param borderColor Base color for the rim highlight.
+ * @param borderWidth Stroke width for the rim.
+ * @param gapSize Fraction of the sweep kept transparent around the light gaps.
+ * @param softness Fraction used to feather the gap edges.
+ * @param overlayBrush Optional fill drawn inside the same outline after the rim.
+ */
 fun Modifier.glassBorder(
     shape: Shape,
     borderColor: Color,

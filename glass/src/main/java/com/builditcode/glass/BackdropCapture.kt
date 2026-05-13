@@ -104,6 +104,26 @@ internal fun ImageBitmap.softwareCopyFromHardware(): ImageBitmap? {
 // LAYER MANAGER
 // =============================================================================
 
+/**
+ * Creates and remembers the backdrop manager used by [layeredBackdropSource] and
+ * [layeredBackdropCapture].
+ *
+ * Provide this through [LocalBackdropLayerManager] when manually wiring layers, or let
+ * [TriLevelLayout] / [QuadLevelLayout] create one for you. A manager owns the capture
+ * state for each layer name, applies the default capture scale/debounce, and releases
+ * native bitmap/layer resources when the composition leaves.
+ *
+ * Important: captures are directional. A glass component should sample a source layer
+ * below or behind it, not the same layer that currently contains the component. For
+ * example, foreground content can sample "background", and overlay content can sample
+ * "foreground" or "background"; foreground content should not sample "foreground".
+ * Same-layer capture can create a feedback loop and is intentionally not a supported
+ * live-glass topology.
+ *
+ * @param defaultScaleFactor Internal capture resolution scale used by new layer states.
+ * Lower values reduce capture/blur cost at the expense of detail.
+ * @param defaultDebounceMs Minimum interval between source recaptures for new layer states.
+ */
 @Composable
 fun rememberBackdropManager(
     defaultScaleFactor: Float = 0.4f,
@@ -115,6 +135,16 @@ fun rememberBackdropManager(
     return manager
 }
 
+/**
+ * Coordinates backdrop source captures by layer name.
+ *
+ * Most apps should use [rememberBackdropManager] instead of constructing this directly.
+ * The manager is useful when multiple manually placed [layeredBackdropSource] and
+ * [layeredBackdropCapture] modifiers need to share named capture state.
+ *
+ * Keep capture names directional: do not place a capture component inside a source and
+ * ask it to sample that same source name. Use a lower/previous layer instead.
+ */
 @Stable
 class BackdropLayerManager(
     private val scope: CoroutineScope,
@@ -145,6 +175,12 @@ class BackdropLayerManager(
         invalidateAll()
     }
 
+    /**
+     * Returns the internal capture state for [layerName], creating it on first use.
+     *
+     * This is primarily used by the source/capture modifiers. Public callers normally
+     * only need [invalidate], [invalidateAll], [stopUpdates], or [startUpdates].
+     */
     fun getState(layerName: String): BackdropState =
         states.getOrPut(layerName) {
             BackdropState(scope, defaultScaleFactor, defaultDebounceMs) { shouldUpdate }
@@ -240,9 +276,43 @@ private fun isDrawingAnyBackdropSource(): Boolean =
 // PUBLIC MODIFIERS
 // =============================================================================
 
+/**
+ * Marks this composable subtree as a named backdrop source.
+ *
+ * The rendered pixels from this subtree are recorded and made available to
+ * [layeredBackdropCapture] nodes that use the same [layerName] from higher/overlay
+ * content. Source names are arbitrary, but stable constants are recommended for
+ * production layouts.
+ *
+ * Important: do not put a [layeredBackdropCapture] inside this same source subtree and
+ * point it back at [layerName]. A capture should sample a source behind it, not the
+ * source that currently contains it. Same-layer sampling can feed the component back
+ * into its own capture and is not supported as live glass.
+ */
 fun Modifier.layeredBackdropSource(layerName: String): Modifier =
     this.then(BackdropSourceElement(layerName))
 
+/**
+ * Applies a backdrop blur/glass effect using the most recent capture from [layerName].
+ *
+ * The modifier clips to [shape], optionally expands the sampled region by [padding], and
+ * draws [filter] behind the composable's own content. Use this on foreground or overlay
+ * UI that sits above the source it samples.
+ *
+ * Important: [layerName] must refer to a source layer behind this component, not the
+ * source layer that contains this component. For example, a card inside foreground
+ * should sample background; a modal in overlay may sample foreground/background. A modal
+ * inside foreground sampling foreground is a feedback loop and is intentionally not a
+ * supported topology, especially on API 33+ where live GPU capture is used.
+ *
+ * @param layerName Name passed to [layeredBackdropSource] for the backdrop to sample.
+ * @param shape Clip shape for the glass surface.
+ * @param padding Extra sampled area around the clipped bounds. Useful when the blur needs
+ * pixels just outside the visible surface.
+ * @param filter Blur or glass filter to apply to the sampled backdrop.
+ * @param autoInvalidateOnMove When true, moving this capture node invalidates other
+ * source captures so moving cards stay fresh over static or moving backgrounds.
+ */
 fun Modifier.layeredBackdropCapture(
     layerName: String,
     shape: Shape = RoundedCornerShape(12.dp),

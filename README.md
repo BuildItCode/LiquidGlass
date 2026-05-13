@@ -98,7 +98,7 @@ setContent {
 }
 ```
 
-For multi-layer setups, `TriLevelLayout` wires up a background -> foreground -> overlay stack for you with both `"background"` and `"foreground"` source layers registered automatically.
+For multi-layer setups, `TriLevelLayout` wires up a background -> foreground -> overlay stack for you with both `TrilevelLayers.Background` and `TrilevelLayers.Foreground` source layers registered automatically. `QuadLevelLayout` adds one more source layer: background -> midground -> foreground -> overlay, exposed through `QuadLevelLayers`.
 
 ---
 

@@ -15,6 +15,8 @@ Multiple named layers can coexist. A foreground card can sample a `"Background"`
 
 Glass surfaces can be captured by higher source layers, so blur-over-blur and glass-over-glass layouts are supported. The only blocked case is true same-source feedback, where a capture tries to sample the source currently recording itself.
 
+`TriLevelLayout` exposes its built-in names through `TrilevelLayers`: `Background`, `Foreground`, and `Overlay`. `QuadLevelLayout` exposes `QuadLevelLayers`: `Background`, `Midground`, `Foreground`, and `Overlay`.
+
 ### Capture backends
 
 | API level | Capture path | Effect path |
@@ -313,6 +315,8 @@ LayeredLayout(modifier = Modifier.fillMaxSize()) {
 ```
 
 Each `layer { previous -> ... }` block receives the composed tree of all previously declared layers. A glass surface should sample a lower layer, and a later layer can then capture that already-rendered glass surface.
+
+For common app shells, use `TriLevelLayout` or `QuadLevelLayout` instead of wiring `LayeredLayout` manually. Use `TrilevelLayers` / `QuadLevelLayers` constants for `layerName` values so capture nodes stay aligned with the built-in source names.
 
 ---
 

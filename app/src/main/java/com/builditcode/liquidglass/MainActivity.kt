@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -59,6 +60,7 @@ import coil3.request.ImageRequest
 import coil3.request.allowHardware
 import com.builditcode.glass.BackdropFilter
 import com.builditcode.glass.TriLevelLayout
+import com.builditcode.glass.TrilevelLayers
 import com.builditcode.glass.glassBorder
 import com.builditcode.glass.layeredBackdropCapture
 import com.builditcode.glass.rememberBackdropManager
@@ -406,9 +408,9 @@ private fun VerificationBottomSheet(
                 )
             }
             .fillMaxWidth()
-            .height(430.dp)
+            .fillMaxHeight(0.95f)
             .layeredBackdropCapture(
-                layerName = "foreground",
+                layerName = TrilevelLayers.Foreground,
                 shape = shape,
                 filter = BackdropFilter.Glass(
                     cornerRadiusDp = 34f,
@@ -446,6 +448,38 @@ private fun VerificationBottomSheet(
                 textAlign = TextAlign.Center
             )
             Spacer(Modifier.height(10.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(58.dp)
+                    .padding(horizontal = 8.dp)
+                    .layeredBackdropCapture(
+                        layerName = TrilevelLayers.Foreground,
+                        shape = RoundedCornerShape(22.dp),
+                        filter = BackdropFilter.Glass(
+                            cornerRadiusDp = 22f,
+                            blurRadiusIntensity = 7f,
+                            refraction = 0.2f,
+                            dispersion = 0.12f,
+                            edge = 0.22f,
+                            tint = Color.White.copy(alpha = 0.08f)
+                        )
+                    )
+                    .glassBorder(
+                        shape = RoundedCornerShape(22.dp),
+                        borderColor = Color.White,
+                        borderWidth = 1.dp
+                    ),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                Text(
+                    text = "Search Applications",
+                    color = Color.White.copy(alpha = 0.82f),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(horizontal = 20.dp)
+                )
+            }
+            Spacer(Modifier.height(18.dp))
             Text(
                 text = "Large capture region sampling the animated background",
                 color = Color.White.copy(alpha = 0.82f),
@@ -494,7 +528,7 @@ private fun VerificationGlassCard(
             .widthIn(max = width)
             .height(136.dp)
             .layeredBackdropCapture(
-                layerName = "background",
+                layerName = TrilevelLayers.Background,
                 shape = shape,
                 filter = BackdropFilter.Glass(
                     cornerRadiusDp = 30f,
