@@ -310,8 +310,9 @@ fun Modifier.layeredBackdropSource(layerName: String): Modifier =
  * @param padding Extra sampled area around the clipped bounds. Useful when the blur needs
  * pixels just outside the visible surface.
  * @param filter Blur or glass filter to apply to the sampled backdrop.
- * @param autoInvalidateOnMove When true, moving this capture node invalidates other
- * source captures so moving cards stay fresh over static or moving backgrounds.
+ * @param autoInvalidateOnMove When true, movement requests a new source capture only
+ * if the moved region cannot be satisfied by the current source capture. Normal movement
+ * reuses the existing full-source capture and updates the crop locally.
  */
 fun Modifier.layeredBackdropCapture(
     layerName: String,
@@ -548,7 +549,9 @@ private class BackdropCaptureNode(
         if (autoInvalidateOnMove) {
             val pos = coordinates.positionInWindow()
             if (lastPosition != Offset.Unspecified && lastPosition != pos) {
-                manager?.invalidateAll(excludeLayerName = layerName)
+                if (state?.getResult(regionId) == null) {
+                    state?.requestCapture()
+                }
             }
             lastPosition = pos
         }
