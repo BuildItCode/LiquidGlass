@@ -186,12 +186,26 @@ class BackdropLayerManager(
             BackdropState(scope, defaultScaleFactor, defaultDebounceMs) { shouldUpdate }
         }
 
+    /**
+     * Request a fresh capture for every known layer.
+     *
+     * This can also prime a layer before its first capture region is attached, which is
+     * useful before showing an overlay that needs glass immediately on first open.
+     */
     fun invalidateAll(excludeLayerName: String? = null) {
-        states.forEach { (name, state) -> if (name != excludeLayerName) state.requestCapture() }
+        states.forEach { (name, state) ->
+            if (name != excludeLayerName) state.requestCapture(force = true)
+        }
     }
 
+    /**
+     * Request a fresh capture for [layerName].
+     *
+     * If the layer already exists, this can prime the source even when no capture node is
+     * currently registered, so a newly opened overlay can use the latest backdrop.
+     */
     fun invalidate(layerName: String) {
-        states[layerName]?.requestCapture()
+        states[layerName]?.requestCapture(force = true)
     }
 
     fun disposeAll() {
@@ -852,7 +866,7 @@ class BackdropState internal constructor(
     }
 
     val shouldCapture: Boolean
-        get() = regions.isNotEmpty()
+        get() = (regions.isNotEmpty() || captureRequested)
                 && processingJob?.isActive != true
                 && debounced()
                 && isUpdateEnabled()
@@ -860,7 +874,11 @@ class BackdropState internal constructor(
     fun getResult(id: Int): CaptureResult? = regions[id]?.result
 
     fun requestCapture() {
-        if (regions.isEmpty()) return
+        requestCapture(force = false)
+    }
+
+    internal fun requestCapture(force: Boolean) {
+        if (regions.isEmpty() && !force) return
         captureRequested = true
         if (isProcessing) return
         invalidateOrSchedule()
@@ -1206,7 +1224,7 @@ class BackdropState internal constructor(
 
         val errorX = (l - rawCrop.left) / scaleFactor
         val errorY = (t - rawCrop.top) / scaleFactor
-        val drawOffset = (intersection.topLeft - regionRect.topLeft) - Offset(errorX, errorY)
+        val drawOffset = (intersection.topLeft - regionRect.topLeft) + Offset(errorX, errorY)
         val drawSize = IntSize((w / scaleFactor).roundToInt(), (h / scaleFactor).roundToInt())
 
         return CropGeometry(IntOffset(l, t), IntSize(w, h), drawOffset, drawSize)

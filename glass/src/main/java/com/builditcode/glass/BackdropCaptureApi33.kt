@@ -14,10 +14,6 @@ import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.toIntSize
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import java.util.concurrent.atomic.AtomicBoolean
 
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
 internal object BackdropCaptureApi33 : BackdropCaptureBackend {
@@ -36,30 +32,12 @@ internal object BackdropCaptureApi33 : BackdropCaptureBackend {
         captureSize: IntSize
     ) {
         val session = state.beginHardwareCapture(captureSize)
-        val ownsLayer = AtomicBoolean(true)
-
-        fun releaseOwnedLayer() {
-            if (ownsLayer.getAndSet(false)) {
-                state.releaseHardwareCaptureLayer(layer)
-            }
+        try {
+            state.applyHardwareLayerCapture(layer, session)
+        } catch (error: Exception) {
+            state.releaseHardwareCaptureLayer(layer)
+            state.onHardwareCaptureFailed(error, session)
         }
-
-        val job = state.captureScope.launch(Dispatchers.Main) {
-            try {
-                state.applyHardwareLayerCapture(layer, session)
-                ownsLayer.set(false)
-            } catch (error: CancellationException) {
-                releaseOwnedLayer()
-                throw error
-            } catch (error: Exception) {
-                releaseOwnedLayer()
-                state.onHardwareCaptureFailed(error, session)
-            }
-        }
-        job.invokeOnCompletion { error ->
-            if (error is CancellationException) releaseOwnedLayer()
-        }
-        state.setHardwareProcessingJob(job)
     }
 
     override fun ContentDrawScope.drawCapture(
