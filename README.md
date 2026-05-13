@@ -38,7 +38,7 @@ Add the dependency:
 
 ```kotlin
 dependencies {
-    implementation("com.github.BuildItCode:LiquidGlass:0.1")
+    implementation("com.github.BuildItCode:LiquidGlass:0.2.5")
 }
 ```
 
@@ -46,13 +46,13 @@ Or with a version catalog:
 
 ```toml
 [versions]
-glass = "0.1"
+glass = "0.2.5"
 
 [libraries]
 glass = { group = "com.github.BuildItCode", name = "LiquidGlass", version.ref = "glass" }
 ```
 
-The Git release tag is `v0.1`; the JitPack dependency version is `0.1`.
+The Git release tag is `v0.2.5`; the JitPack dependency version is `0.2.5`.
 
 ---
 
