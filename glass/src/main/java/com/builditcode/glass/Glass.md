@@ -130,7 +130,7 @@ On API 33+, the source is captured into a retained `GraphicsLayer` and consumed 
 ```kotlin
 fun Modifier.layeredBackdropCapture(
     layerName: String,
-    shape: Shape                = RoundedCornerShape(12.dp),
+    shape: Shape?               = null,
     padding: PaddingValues      = PaddingValues(0.dp),
     filter: BackdropFilter      = BackdropFilter.Blur(),
     autoInvalidateOnMove: Boolean = true
@@ -144,10 +144,10 @@ The capture should sample a source below it. Captures can be included in later s
 | Parameter | Description |
 |-----------|-------------|
 | `layerName` | Must match a `layeredBackdropSource` layer name. |
-| `shape` | Clip shape for the blur region. |
+| `shape` | Optional clip shape override. If omitted, `filter.shape` is used for both clipping and shader edge math. |
 | `padding` | Inset the blur region if needed. |
 | `filter` | The visual effect to apply: `Blur` or `Glass`. |
-| `autoInvalidateOnMove` | When `true`, moving this composable triggers a refresh of other layers. Keeps layered effects in sync during drag. |
+| `autoInvalidateOnMove` | When `true`, movement requests a capture only if the moved region cannot be satisfied from the current source capture. |
 
 ---
 
@@ -182,6 +182,7 @@ Standard backdrop blur with optional tint.
 
 ```kotlin
 BackdropFilter.Blur(
+    shape = RoundedCornerShape(16.dp),
     blurRadiusIntensity = 5f,            // 0.0-10.0
     tint = Color.White.copy(alpha = 0.05f)
 )
@@ -197,8 +198,13 @@ Frosted glass with blur, refraction, edge rim lighting, and optional tint. API 3
 
 ```kotlin
 BackdropFilter.Glass(
+    shape = RoundedCornerShape(
+        topStart = 28.dp,
+        topEnd = 28.dp,
+        bottomEnd = 12.dp,
+        bottomStart = 12.dp
+    ),
     blurRadiusIntensity = 3f,    // base blur, 0.0-10.0          (default)
-    cornerRadiusDp      = 12f,   // must match the shape corner radius for correct edge refraction
     refraction          = 0.15f, // light bending through thick glass
     dispersion          = 0.12f, // chromatic aberration (RGB splitting)
     edge                = 0.2f,  // white rim-light intensity
@@ -208,7 +214,7 @@ BackdropFilter.Glass(
 
 **API compatibility:** Full AGSL shader on API 33+. The AGSL path uses blur, refraction, dispersion, edge, and tint. API 24-32 uses the legacy CPU bitmap fallback with blur, refraction, edge distortion, and tint; dispersion is AGSL-only.
 
-> `cornerRadiusDp` should match the `dp` value used in the `shape` passed to `layeredBackdropCapture` for physically accurate edge refraction. The shader compiles lazily on first draw and is cached on the `Glass` instance, so prefer remembering stable filter instances when the parameters are not changing.
+> On API 33+, `RoundedCornerShape` resolves to four independent shader corner radii, so asymmetric corners affect refraction and rim lighting. Arbitrary path shapes still clip correctly, but the AGSL edge math falls back to rectangular radii. The shader compiles lazily on first draw and is cached on the `Glass` instance, so prefer remembering stable filter instances when the parameters are not changing.
 
 ---
 
@@ -246,8 +252,9 @@ CompositionLocalProvider(LocalBackdropLayerManager provides backdropManager) {
                 )
                 .layeredBackdropCapture(
                     layerName = "Background",
-                    shape     = RoundedCornerShape(20.dp),
-                    filter    = BackdropFilter.Glass(cornerRadiusDp = 20f)
+                    filter    = BackdropFilter.Glass(
+                        shape = RoundedCornerShape(20.dp)
+                    )
                 )
         ) {
             Text("Hello glass")

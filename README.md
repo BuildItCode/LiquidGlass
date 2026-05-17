@@ -89,8 +89,9 @@ setContent {
                     )
                     .layeredBackdropCapture(
                         layerName = "background",
-                        shape     = RoundedCornerShape(20.dp),
-                        filter    = BackdropFilter.Glass(cornerRadiusDp = 20f)
+                        filter    = BackdropFilter.Glass(
+                            shape = RoundedCornerShape(20.dp)
+                        )
                     )
             )
         }
@@ -106,8 +107,8 @@ For multi-layer setups, `TriLevelLayout` wires up a background -> foreground -> 
 
 | Filter | Description |
 |--------|-------------|
-| `BackdropFilter.Blur` | Backdrop blur with optional tint. |
-| `BackdropFilter.Glass` | Frosted glass with refraction, dispersion, edge rim lighting, and optional tint. |
+| `BackdropFilter.Blur` | Backdrop blur with optional tint and shape-owned clipping. |
+| `BackdropFilter.Glass` | Frosted glass with shape-aware refraction, dispersion, edge rim lighting, and optional tint. |
 
 See [`glass/.../Glass.md`](glass/src/main/java/com/builditcode/glass/Glass.md) for the full parameter reference, layer structure, modal patterns, API compatibility, and performance notes.
 

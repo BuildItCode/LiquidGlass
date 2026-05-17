@@ -1,6 +1,7 @@
 package com.builditcode.glass
 
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
@@ -57,6 +58,7 @@ internal object BackdropCaptureLegacy : BackdropCaptureBackend {
 
     override fun ContentDrawScope.drawCapture(
         filter: BackdropFilter,
+        shape: Shape,
         result: BackdropState.CaptureResult?,
         layer: GraphicsLayer?,
         density: Float,

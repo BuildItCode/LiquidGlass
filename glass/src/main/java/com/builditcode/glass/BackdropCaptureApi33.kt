@@ -4,6 +4,7 @@ import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipRect
@@ -42,6 +43,7 @@ internal object BackdropCaptureApi33 : BackdropCaptureBackend {
 
     override fun ContentDrawScope.drawCapture(
         filter: BackdropFilter,
+        shape: Shape,
         result: BackdropState.CaptureResult?,
         layer: GraphicsLayer?,
         density: Float,
@@ -59,7 +61,7 @@ internal object BackdropCaptureApi33 : BackdropCaptureBackend {
 
         when (filter) {
             is BackdropFilter.Blur -> drawBlur(filter, targetLayer, density)
-            is BackdropFilter.Glass -> drawGlass(filter, targetLayer, density)
+            is BackdropFilter.Glass -> drawGlass(filter, shape, targetLayer, density)
         }
     }
 
@@ -119,11 +121,13 @@ internal object BackdropCaptureApi33 : BackdropCaptureBackend {
 
     private fun ContentDrawScope.drawGlass(
         glass: BackdropFilter.Glass,
+        shape: Shape,
         layer: GraphicsLayer,
         density: Float
     ) {
         val blurPx = glass.blurRadiusIntensity * 2f * density
-        glass.applyUniforms(size.width, size.height, density)
+        val cornerRadii = shape.resolveGlassCornerRadii(size, layoutDirection, this)
+        glass.applyUniforms(size.width, size.height, density, cornerRadii)
         layer.renderEffect = glass.getOrBuildRenderEffect(blurPx)
         drawLayer(layer)
     }

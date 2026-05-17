@@ -411,9 +411,8 @@ private fun VerificationBottomSheet(
             .fillMaxHeight(0.95f)
             .layeredBackdropCapture(
                 layerName = TrilevelLayers.Foreground,
-                shape = shape,
                 filter = BackdropFilter.Glass(
-                    cornerRadiusDp = 34f,
+                    shape = shape,
                     blurRadiusIntensity = 7f,
                     refraction = 0.24f,
                     dispersion = 0.14f,
@@ -448,6 +447,7 @@ private fun VerificationBottomSheet(
                 textAlign = TextAlign.Center
             )
             Spacer(Modifier.height(10.dp))
+            val searchShape = RoundedCornerShape(22.dp)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -455,9 +455,8 @@ private fun VerificationBottomSheet(
                     .padding(horizontal = 8.dp)
                     .layeredBackdropCapture(
                         layerName = TrilevelLayers.Foreground,
-                        shape = RoundedCornerShape(22.dp),
                         filter = BackdropFilter.Glass(
-                            cornerRadiusDp = 22f,
+                            shape = searchShape,
                             blurRadiusIntensity = 7f,
                             refraction = 0.2f,
                             dispersion = 0.12f,
@@ -466,7 +465,7 @@ private fun VerificationBottomSheet(
                         )
                     )
                     .glassBorder(
-                        shape = RoundedCornerShape(22.dp),
+                        shape = searchShape,
                         borderColor = Color.White,
                         borderWidth = 1.dp
                     ),
@@ -521,7 +520,10 @@ private fun VerificationGlassCard(
     caption: String = scenario.caption,
     width: Dp = 320.dp
 ) {
-    val shape = RoundedCornerShape(30.dp)
+    val shape = RoundedCornerShape(
+        topStart = 12.dp,
+        topEnd = 12.dp
+    )
 
     Box(
         modifier = modifier
@@ -529,9 +531,8 @@ private fun VerificationGlassCard(
             .height(136.dp)
             .layeredBackdropCapture(
                 layerName = TrilevelLayers.Background,
-                shape = shape,
                 filter = BackdropFilter.Glass(
-                    cornerRadiusDp = 30f,
+                    shape = shape,
                     blurRadiusIntensity = 6f,
                     refraction = 0.2f,
                     dispersion = 0.12f,

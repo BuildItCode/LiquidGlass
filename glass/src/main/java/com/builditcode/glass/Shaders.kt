@@ -15,7 +15,7 @@ internal val GLASS_SHADER = """
     uniform float2 resolution;
     uniform float2 lensCenter;
     uniform float2 lensSize;
-    uniform float cornerRadius;
+    uniform float4 cornerRadii;
     uniform float refraction;
     uniform float dispersion;
     uniform float edge;
@@ -23,6 +23,13 @@ internal val GLASS_SHADER = """
     uniform shader content;
 
     const float AA = 1.5;
+
+    float cornerRadiusFor(float2 p, float4 radii) {
+        if (p.y < 0.0) {
+            return p.x < 0.0 ? radii.x : radii.y;
+        }
+        return p.x >= 0.0 ? radii.z : radii.w;
+    }
 
     float sdfRoundedRect(float2 p, float2 ext, float r) {
         float2 d = abs(p) - ext + float2(r);
@@ -39,8 +46,8 @@ internal val GLASS_SHADER = """
     half4 main(float2 fc) {
         float2 half_ext = lensSize * 0.5;
         float min_ext = min(half_ext.x, half_ext.y);
-        float cr = min(cornerRadius, min_ext);
         float2 lp = fc - lensCenter;
+        float cr = min(cornerRadiusFor(lp, cornerRadii), min_ext);
         float dist = sdfRoundedRect(lp, half_ext, cr);
         if (dist > AA) return half4(0.0);
 

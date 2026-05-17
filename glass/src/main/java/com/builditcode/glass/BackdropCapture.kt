@@ -34,9 +34,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asComposeRenderEffect
@@ -59,8 +61,10 @@ import androidx.compose.ui.node.invalidateDraw
 import androidx.compose.ui.node.observeReads
 import androidx.compose.ui.node.requireGraphicsContext
 import androidx.compose.ui.platform.InspectorInfo
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toSize
 import androidx.core.graphics.createBitmap
@@ -73,6 +77,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 // =============================================================================
@@ -242,6 +247,7 @@ internal interface BackdropCaptureBackend {
 
     fun ContentDrawScope.drawCapture(
         filter: BackdropFilter,
+        shape: Shape,
         result: BackdropState.CaptureResult?,
         layer: GraphicsLayer?,
         density: Float,
@@ -309,9 +315,9 @@ fun Modifier.layeredBackdropSource(layerName: String): Modifier =
 /**
  * Applies a backdrop blur/glass effect using the most recent capture from [layerName].
  *
- * The modifier clips to [shape], optionally expands the sampled region by [padding], and
- * draws [filter] behind the composable's own content. Use this on foreground or overlay
- * UI that sits above the source it samples.
+ * The modifier clips to [shape] when provided, otherwise it clips to [BackdropFilter.shape].
+ * API 33+ Glass also uses the same resolved shape to drive rounded-edge refraction and
+ * rim lighting. Use this on foreground or overlay UI that sits above the source it samples.
  *
  * Important: [layerName] must refer to a source layer behind this component, not the
  * source layer that contains this component. For example, a card inside foreground
@@ -320,7 +326,7 @@ fun Modifier.layeredBackdropSource(layerName: String): Modifier =
  * supported topology, especially on API 33+ where live GPU capture is used.
  *
  * @param layerName Name passed to [layeredBackdropSource] for the backdrop to sample.
- * @param shape Clip shape for the glass surface.
+ * @param shape Optional clip shape override. If omitted, [BackdropFilter.shape] is used.
  * @param padding Extra sampled area around the clipped bounds. Useful when the blur needs
  * pixels just outside the visible surface.
  * @param filter Blur or glass filter to apply to the sampled backdrop.
@@ -330,14 +336,17 @@ fun Modifier.layeredBackdropSource(layerName: String): Modifier =
  */
 fun Modifier.layeredBackdropCapture(
     layerName: String,
-    shape: Shape = RoundedCornerShape(12.dp),
+    shape: Shape? = null,
     padding: PaddingValues = PaddingValues(0.dp),
     filter: BackdropFilter = BackdropFilter.Blur(),
     autoInvalidateOnMove: Boolean = true
-): Modifier = this
-    .padding(padding)
-    .clip(shape)
-    .then(BackdropCaptureElement(layerName, filter, autoInvalidateOnMove))
+): Modifier {
+    val captureShape = shape ?: filter.shape
+    return this
+        .padding(padding)
+        .clip(captureShape)
+        .then(BackdropCaptureElement(layerName, captureShape, filter, autoInvalidateOnMove))
+}
 
 // =============================================================================
 // SOURCE NODE
@@ -489,22 +498,25 @@ private class BackdropSourceNode(
 
 private data class BackdropCaptureElement(
     val layerName: String,
+    val shape: Shape,
     val filter: BackdropFilter,
     val autoInvalidateOnMove: Boolean
 ) : ModifierNodeElement<BackdropCaptureNode>() {
-    override fun create() = BackdropCaptureNode(layerName, filter, autoInvalidateOnMove)
+    override fun create() = BackdropCaptureNode(layerName, shape, filter, autoInvalidateOnMove)
     override fun update(node: BackdropCaptureNode) {
-        node.update(layerName, filter, autoInvalidateOnMove)
+        node.update(layerName, shape, filter, autoInvalidateOnMove)
     }
     override fun InspectorInfo.inspectableProperties() {
         name = "layeredBackdropCapture"
         properties["layerName"] = layerName
+        properties["shape"] = shape
         properties["filter"] = filter
     }
 }
 
 private class BackdropCaptureNode(
     var layerName: String,
+    var shape: Shape,
     var filter: BackdropFilter,
     var autoInvalidateOnMove: Boolean
 ) : Modifier.Node(),
@@ -525,9 +537,10 @@ private class BackdropCaptureNode(
     private var recordingSnapshotSize = IntSize.Zero
     private val cpuBlurCache = CpuBlurCache()
 
-    fun update(newName: String, newFilter: BackdropFilter, newAutoMove: Boolean) {
+    fun update(newName: String, newShape: Shape, newFilter: BackdropFilter, newAutoMove: Boolean) {
         val layerChanged = layerName != newName
-        val shouldInvalidate = layerChanged || filter != newFilter || autoInvalidateOnMove != newAutoMove
+        val shapeChanged = shape != newShape
+        val shouldInvalidate = layerChanged || shapeChanged || filter != newFilter || autoInvalidateOnMove != newAutoMove
         if (layerChanged) {
             cachedState?.unregisterRegion(regionId)
             layerName = newName
@@ -536,7 +549,8 @@ private class BackdropCaptureNode(
             clearRecordingSnapshot()
             cpuBlurCache.clear()
         }
-        if (filter != newFilter) clearRecordingSnapshot()
+        if (shapeChanged || filter != newFilter) clearRecordingSnapshot()
+        shape = newShape
         filter = newFilter
         autoInvalidateOnMove = newAutoMove
         if (shouldInvalidate) invalidateDraw()
@@ -612,6 +626,7 @@ private class BackdropCaptureNode(
         backdropCaptureBackend.run {
             drawCapture(
                 filter = filter,
+                shape = shape,
                 result = result,
                 layer = graphicsLayer,
                 density = density,
@@ -688,13 +703,45 @@ private class BackdropCaptureNode(
 // FILTER DEFINITIONS
 // =============================================================================
 
+internal data class GlassCornerRadii(
+    val topLeft: Float,
+    val topRight: Float,
+    val bottomRight: Float,
+    val bottomLeft: Float
+) {
+    companion object {
+        val Zero = GlassCornerRadii(0f, 0f, 0f, 0f)
+    }
+}
+
+internal fun Shape.resolveGlassCornerRadii(
+    size: Size,
+    layoutDirection: LayoutDirection,
+    density: Density
+): GlassCornerRadii {
+    return when (val outline = createOutline(size, layoutDirection, density)) {
+        is Outline.Rounded -> {
+            val roundRect = outline.roundRect
+            GlassCornerRadii(
+                topLeft = min(roundRect.topLeftCornerRadius.x, roundRect.topLeftCornerRadius.y),
+                topRight = min(roundRect.topRightCornerRadius.x, roundRect.topRightCornerRadius.y),
+                bottomRight = min(roundRect.bottomRightCornerRadius.x, roundRect.bottomRightCornerRadius.y),
+                bottomLeft = min(roundRect.bottomLeftCornerRadius.x, roundRect.bottomLeftCornerRadius.y)
+            )
+        }
+        else -> GlassCornerRadii.Zero
+    }
+}
+
 @Stable
 sealed interface BackdropFilter {
+    val shape: Shape
 
     @Stable
     data class Blur(
         @field:FloatRange(0.0, 10.0) val blurRadiusIntensity: Float = 5f,
         val tint: Color = Color.Transparent,
+        override val shape: Shape = RoundedCornerShape(12.dp),
     ) : BackdropFilter {
         @Volatile private var cachedBlurPx: Float = -1f
         @Volatile private var cachedEffect: androidx.compose.ui.graphics.RenderEffect? = null
@@ -714,17 +761,18 @@ sealed interface BackdropFilter {
     @Stable
     data class Glass(
         @field:FloatRange(0.0, 10.0) val blurRadiusIntensity: Float = 3f,
-        val cornerRadiusDp: Float = 12f,
         val refraction: Float = 0.24f,
         val dispersion: Float = 0.2f,
         val edge: Float = 0.18f,
         val tint: Color = Color.Transparent,
+        override val shape: Shape = RoundedCornerShape(12.dp),
     ) : BackdropFilter {
         val shader: RuntimeShader? by lazy { createGlassShader() }
 
         private var cachedEffect: androidx.compose.ui.graphics.RenderEffect? = null
         private var cachedBlurPx: Float = -1f
         private var lastDensity = -1f
+        private var lastCornerRadii: GlassCornerRadii? = null
         private var lastW = -1f
         private var lastH = -1f
 
@@ -748,15 +796,27 @@ sealed interface BackdropFilter {
         }
 
         @RequiresApi(Build.VERSION_CODES.TIRAMISU)
-        internal fun applyUniforms(w: Float, h: Float, density: Float) {
+        internal fun applyUniforms(
+            w: Float,
+            h: Float,
+            density: Float,
+            cornerRadii: GlassCornerRadii
+        ) {
             val s = shader ?: return
-            if (lastDensity != density) {
-                s.setFloatUniform("cornerRadius", cornerRadiusDp * density)
+            if (lastDensity != density || lastCornerRadii != cornerRadii) {
+                s.setFloatUniform(
+                    "cornerRadii",
+                    cornerRadii.topLeft,
+                    cornerRadii.topRight,
+                    cornerRadii.bottomRight,
+                    cornerRadii.bottomLeft
+                )
                 s.setFloatUniform("refraction", refraction)
                 s.setFloatUniform("dispersion", dispersion)
                 s.setFloatUniform("edge", edge)
                 s.setFloatUniform("tint", tint.red, tint.green, tint.blue, tint.alpha)
                 lastDensity = density
+                lastCornerRadii = cornerRadii
             }
             if (lastW != w || lastH != h) {
                 s.setFloatUniform("resolution", w, h)
