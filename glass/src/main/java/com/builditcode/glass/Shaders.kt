@@ -23,6 +23,7 @@ internal val GLASS_SHADER = """
     uniform shader content;
 
     const float AA = 1.5;
+    const float REFRACTION_FALLOFF = 1.25;
 
     float cornerRadiusFor(float2 p, float4 radii) {
         if (p.y < 0.0) {
@@ -55,9 +56,9 @@ internal val GLASS_SHADER = """
         float2 sc = fc;
 
         if (refraction > 0.0) {
-            float depth = clamp(-dist / (min_ext * refraction), 0.0, 1.0);
+            float depth = clamp(-dist / (min_ext * refraction * REFRACTION_FALLOFF), 0.0, 1.0);
             float sf = 1.0 - depth;
-            float bend = 1.0 - sqrt(max(0.0, 1.0 - sf * sf));
+            float bend = sf * sf;
             sc = fc - bend * refraction * min_ext * n;
         }
 
@@ -273,7 +274,7 @@ internal fun applyCpuGlassRefraction(
     val halfW = w * 0.5f
     val halfH = h * 0.5f
     val minExt = min(halfW, halfH).coerceAtLeast(1f)
-    val edgeWidth = (minExt * (0.10f + edgeAmount * 0.28f)).coerceAtLeast(1f)
+    val edgeWidth = (minExt * (0.10f + edgeAmount * 0.28f) * 1.45f).coerceAtLeast(1f)
     val radialStrength = refractionAmount * minExt * 0.08f
     val edgeStrength = (edgeAmount * 0.22f + refractionAmount * 0.12f) * minExt
 
