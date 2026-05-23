@@ -89,7 +89,7 @@ internal fun LiquidSurface(
             .clip(liquidShape)
         Box(
             if (layerName == null) {
-                surfaceFill.background(colors.tint.copy(alpha = 0.95f))
+                surfaceFill.background(colors.tint)
             } else {
                 surfaceFill.background(
                     Brush.verticalGradient(
@@ -158,7 +158,7 @@ internal fun LiquidGlassHandle(
             .clip(shape)
         Box(
             if (layerName == null) {
-                handleFill.background(colors.tint.copy(alpha = 0.95f))
+                handleFill.background(colors.tint)
             } else {
                 handleFill.background(
                     Brush.verticalGradient(
