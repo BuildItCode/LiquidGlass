@@ -15,8 +15,8 @@ android {
         applicationId = "com.builditcode.liquidglass"
         minSdk = 24
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.3.6"
+        versionCode = 9
+        versionName = "0.3.7"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

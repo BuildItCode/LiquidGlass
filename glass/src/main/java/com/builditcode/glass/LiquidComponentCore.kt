@@ -84,11 +84,14 @@ internal fun LiquidSurface(
         ),
         contentAlignment = Alignment.Center
     ) {
+        val surfaceFill = Modifier
+            .matchParentSize()
+            .clip(liquidShape)
         Box(
-            Modifier
-                .matchParentSize()
-                .clip(liquidShape)
-                .background(
+            if (layerName == null) {
+                surfaceFill.background(colors.tint.copy(alpha = 0.95f))
+            } else {
+                surfaceFill.background(
                     Brush.verticalGradient(
                         listOf(
                             Color.White.copy(alpha = 0.10f + visuals.brightness),
@@ -96,6 +99,7 @@ internal fun LiquidSurface(
                         )
                     )
                 )
+            }
         )
         content()
     }
@@ -149,11 +153,14 @@ internal fun LiquidGlassHandle(
             rotationDegrees = borderRotationDegrees
         )
     ) {
+        val handleFill = Modifier
+            .fillMaxSize()
+            .clip(shape)
         Box(
-            Modifier
-                .fillMaxSize()
-                .clip(shape)
-                .background(
+            if (layerName == null) {
+                handleFill.background(colors.tint.copy(alpha = 0.95f))
+            } else {
+                handleFill.background(
                     Brush.verticalGradient(
                         listOf(
                             Color.White.copy(alpha = 0.74f),
@@ -161,6 +168,7 @@ internal fun LiquidGlassHandle(
                         )
                     )
                 )
+            }
         )
     }
 }
