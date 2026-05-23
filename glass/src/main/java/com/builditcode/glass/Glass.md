@@ -160,17 +160,32 @@ fun Modifier.glassBorder(
     borderWidth: Dp,
     gapSize: Float  = 0.15f,
     softness: Float = 0.05f,
-    overlayBrush: Brush? = null
+    overlayBrush: Brush? = null,
+    rotationDegrees: Float = 0f
 ): Modifier
 ```
 
 Draws a sweep-gradient border with gaps at the top-right and bottom-left corners (to mimic light catching the edge of physical glass). Combine with `layeredBackdropCapture` for a complete glass panel.
+
+For an opt-in device-motion rim, remember a sensor-backed rotation value and pass it to the border:
+
+```kotlin
+val borderRotation = rememberGlassBorderGyroscopeRotation()
+
+Modifier.glassBorder(
+    shape = shape,
+    borderColor = Color.White,
+    borderWidth = 1.dp,
+    rotationDegrees = borderRotation
+)
+```
 
 | Parameter | Description |
 |-----------|-------------|
 | `gapSize` | Size of the transparent gaps as a fraction of the sweep (0-0.4). |
 | `softness` | Feathering width of gap edges (0-0.1). |
 | `overlayBrush` | Optional brush drawn over the content (e.g. a white gloss gradient). |
+| `rotationDegrees` | Extra rotation applied to the sweep highlight. Use `0f` for a static border, or `rememberGlassBorderGyroscopeRotation()` for opt-in device-motion rotation. |
 
 ---
 
@@ -324,6 +339,74 @@ LayeredLayout(modifier = Modifier.fillMaxSize()) {
 Each `layer { previous -> ... }` block receives the composed tree of all previously declared layers. A glass surface should sample a lower layer, and a later layer can then capture that already-rendered glass surface.
 
 For common app shells, use `TriLevelLayout` or `QuadLevelLayout` instead of wiring `LayeredLayout` manually. Use `TrilevelLayers` / `QuadLevelLayers` constants for `layerName` values so capture nodes stay aligned with the built-in source names.
+
+### `LiquidScaffold`
+
+`LiquidScaffold` wraps `QuadLevelLayout` with a state object that can register dynamic content into any layer:
+
+```kotlin
+val scaffoldState = rememberLiquidScaffoldState()
+var modalHandle by remember { mutableStateOf<LiquidScaffoldComponentHandle?>(null) }
+
+LiquidScaffold(
+    modifier = Modifier.fillMaxSize(),
+    state = scaffoldState,
+    background = { HomeWallpaper() },
+    midground = { HomeContent() },
+    foreground = { Dock() }
+)
+
+Button(
+    onClick = {
+        modalHandle?.remove()
+        modalHandle = scaffoldState.addComponent(layer = QuadLevelLayers.Overlay) {
+            GlassModal(layerName = QuadLevelLayers.Foreground)
+        }
+    }
+) {
+    Text("Open")
+}
+```
+
+Keep the returned handle and call `remove()` when the surface closes or the owner is disposed. Use `state.addComponent(key = ..., layer = ...)` when an owner may re-register the same surface and should replace the previous entry instead of adding a duplicate. Content inside `LiquidScaffold` can also read `LocalLiquidScaffoldState.current`.
+
+---
+
+## Liquid Components
+
+The library includes ready-made glass controls that share the same interaction behavior: a small spring scale, slight bounce, and brightness lift while pressed or dragged.
+
+```kotlin
+LiquidSearchBar(
+    value = query,
+    onValueChange = { query = it },
+    placeholder = "Search apps",
+    borderRotationDegrees = rememberGlassBorderGyroscopeRotation()
+)
+
+LiquidButton(
+    text = "Continue",
+    onClick = ::continueFlow
+)
+
+LiquidToggle(
+    checked = enabled,
+    onCheckedChange = { enabled = it }
+)
+
+LiquidSlider(
+    value = intensity,
+    onValueChange = { intensity = it }
+)
+
+LiquidCard(
+    onClick = ::openDetails
+) {
+    Text("Glass content")
+}
+```
+
+By default these controls render without backdrop capture, which makes them usable in previews, dialogs, and ordinary Compose layouts. Pass `layerName = QuadLevelLayers.Background` or another source layer when the control is inside a layered glass scene and should sample live content behind it. Each component also accepts `borderRotationDegrees`; pass `rememberGlassBorderGyroscopeRotation()` when you want the rim highlight to react to device motion. `LiquidButton` and `LiquidCard` also have slot content for custom layouts.
 
 ---
 

@@ -99,7 +99,7 @@ setContent {
 }
 ```
 
-For multi-layer setups, `TriLevelLayout` wires up a background -> foreground -> overlay stack for you with both `TrilevelLayers.Background` and `TrilevelLayers.Foreground` source layers registered automatically. `QuadLevelLayout` adds one more source layer: background -> midground -> foreground -> overlay, exposed through `QuadLevelLayers`.
+For multi-layer setups, `TriLevelLayout` wires up a background -> foreground -> overlay stack for you with both `TrilevelLayers.Background` and `TrilevelLayers.Foreground` source layers registered automatically. `QuadLevelLayout` adds one more source layer: background -> midground -> foreground -> overlay, exposed through `QuadLevelLayers`. `LiquidScaffold` builds on `QuadLevelLayout` with a state registry so dynamic surfaces can be added to a layer from anywhere that can access the scaffold state.
 
 ---
 
@@ -109,6 +109,8 @@ For multi-layer setups, `TriLevelLayout` wires up a background -> foreground -> 
 |--------|-------------|
 | `BackdropFilter.Blur` | Backdrop blur with optional tint and shape-owned clipping. |
 | `BackdropFilter.Glass` | Frosted glass with shape-aware refraction, dispersion, edge rim lighting, and optional tint. |
+
+Liquid controls are included for common surfaces: `LiquidSearchBar`, `LiquidButton`, `LiquidToggle`, `LiquidSlider`, and `LiquidCard`. They use the same backdrop capture pipeline and add spring scale, bounce, shape morphing, and brightness feedback during interaction.
 
 See [`glass/.../Glass.md`](glass/src/main/java/com/builditcode/glass/Glass.md) for the full parameter reference, layer structure, modal patterns, API compatibility, and performance notes.
 

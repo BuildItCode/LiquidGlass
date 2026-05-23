@@ -1,10 +1,23 @@
 package com.builditcode.glass
 
+import android.content.Context
 import android.graphics.Matrix
 import android.graphics.Shader
 import android.graphics.SweepGradient
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.view.Surface
+import android.view.WindowManager
 import androidx.compose.foundation.gestures.FlingBehavior
 import androidx.compose.foundation.gestures.ScrollScope
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Size
@@ -16,6 +29,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import kotlin.math.atan2
 
@@ -32,6 +46,9 @@ import kotlin.math.atan2
  * @param gapSize Fraction of the sweep kept transparent around the light gaps.
  * @param softness Fraction used to feather the gap edges.
  * @param overlayBrush Optional fill drawn inside the same outline after the rim.
+ * @param rotationDegrees Additional rotation applied to the sweep highlight. Keep this at
+ * zero for a static border, or pass [rememberGlassBorderGyroscopeRotation] for an opt-in
+ * device-motion highlight.
  */
 fun Modifier.glassBorder(
     shape: Shape,
@@ -39,7 +56,8 @@ fun Modifier.glassBorder(
     borderWidth: Dp,
     gapSize: Float = 0.1f, // Default sensible value
     softness: Float = 0.05f,
-    overlayBrush: Brush? = null
+    overlayBrush: Brush? = null,
+    rotationDegrees: Float = 0f
 ) = this.drawWithCache {
     // 1. Calculate Geometry (Angle to Top-Right Corner)
     val dx = size.width / 2
@@ -81,7 +99,7 @@ fun Modifier.glassBorder(
             return SweepGradient(center.x, center.y, colors, stops).apply {
                 // Rotate the gradient so the "Gap" aligns with the corner angle calculated above
                 setLocalMatrix(Matrix().apply {
-                    postRotate(angleToCorner, center.x, center.y)
+                    postRotate(angleToCorner + rotationDegrees, center.x, center.y)
                 })
             }
         }
@@ -101,6 +119,118 @@ fun Modifier.glassBorder(
         drawOutline(outline = outline, brush = borderBrush, style = Stroke(width = strokeWidth))
     }
 }
+
+/**
+ * Returns a small border-rotation offset driven by device motion.
+ *
+ * The helper is intentionally opt-in because it registers a sensor listener. It prefers the
+ * game rotation vector sensor, which is backed by device-motion fusion and gives stable tilt
+ * data without requiring magnetic north. Devices without a rotation-vector sensor fall back
+ * to raw gyroscope integration with light damping.
+ *
+ * Use the returned value as [glassBorder]'s `rotationDegrees`.
+ */
+@Composable
+fun rememberGlassBorderGyroscopeRotation(
+    enabled: Boolean = true,
+    maxRotationDegrees: Float = 18f,
+    sensitivity: Float = 0.65f,
+    smoothing: Float = 0.18f
+): Float {
+    val context = LocalContext.current
+    var rotationDegrees by remember { mutableFloatStateOf(0f) }
+
+    DisposableEffect(context, enabled, maxRotationDegrees, sensitivity, smoothing) {
+        if (!enabled) {
+            rotationDegrees = 0f
+            return@DisposableEffect onDispose { }
+        }
+
+        val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+        val sensor = sensorManager?.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
+            ?: sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+            ?: sensorManager?.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+
+        if (sensorManager == null || sensor == null) {
+            rotationDegrees = 0f
+            return@DisposableEffect onDispose { }
+        }
+
+        val maxRotation = maxRotationDegrees.coerceAtLeast(0f)
+        val sensorSensitivity = sensitivity.coerceAtLeast(0f)
+        val blend = smoothing.coerceIn(0.02f, 1f)
+        val rotationMatrix = FloatArray(9)
+        val orientation = FloatArray(3)
+        val displayRotation = context.displayRotation()
+        var integratedRotation = 0f
+        var lastTimestamp = 0L
+
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent) {
+                val target = when (event.sensor.type) {
+                    Sensor.TYPE_GAME_ROTATION_VECTOR,
+                    Sensor.TYPE_ROTATION_VECTOR -> {
+                        SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
+                        SensorManager.getOrientation(rotationMatrix, orientation)
+                        val pitch = Math.toDegrees(orientation[1].toDouble()).toFloat()
+                        val roll = Math.toDegrees(orientation[2].toDouble()).toFloat()
+                        tiltToBorderRotation(
+                            pitch = pitch,
+                            roll = roll,
+                            displayRotation = displayRotation
+                        ) * sensorSensitivity
+                    }
+
+                    Sensor.TYPE_GYROSCOPE -> {
+                        if (lastTimestamp != 0L) {
+                            val dtSeconds = (event.timestamp - lastTimestamp) * 0.000000001f
+                            val zVelocity = event.values.getOrNull(2) ?: 0f
+                            integratedRotation += Math.toDegrees((zVelocity * dtSeconds).toDouble()).toFloat() *
+                                sensorSensitivity
+                            integratedRotation *= 0.985f
+                        }
+                        lastTimestamp = event.timestamp
+                        integratedRotation
+                    }
+
+                    else -> 0f
+                }.coerceIn(-maxRotation, maxRotation)
+
+                rotationDegrees += (target - rotationDegrees) * blend
+            }
+
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+        }
+
+        sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_GAME)
+
+        onDispose {
+            sensorManager.unregisterListener(listener)
+            rotationDegrees = 0f
+        }
+    }
+
+    return rotationDegrees
+}
+
+private fun tiltToBorderRotation(
+    pitch: Float,
+    roll: Float,
+    displayRotation: Int
+): Float =
+    when (displayRotation) {
+        Surface.ROTATION_90 -> roll * 0.34f - pitch * 0.48f
+        Surface.ROTATION_180 -> -roll * 0.48f - pitch * 0.34f
+        Surface.ROTATION_270 -> -roll * 0.34f + pitch * 0.48f
+        else -> roll * 0.48f + pitch * 0.34f
+    }
+
+@Suppress("DEPRECATION")
+private fun Context.displayRotation(): Int =
+    (getSystemService(Context.WINDOW_SERVICE) as? WindowManager)
+        ?.defaultDisplay
+        ?.rotation
+        ?: Surface.ROTATION_0
 
 val noFlingBehavior = object : FlingBehavior {
     override suspend fun ScrollScope.performFling(initialVelocity: Float): Float {

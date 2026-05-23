@@ -59,11 +59,17 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.allowHardware
 import com.builditcode.glass.BackdropFilter
+import com.builditcode.glass.LiquidButton
+import com.builditcode.glass.LiquidCard
+import com.builditcode.glass.LiquidSearchBar
+import com.builditcode.glass.LiquidSlider
+import com.builditcode.glass.LiquidToggle
 import com.builditcode.glass.TriLevelLayout
 import com.builditcode.glass.TrilevelLayers
 import com.builditcode.glass.glassBorder
 import com.builditcode.glass.layeredBackdropCapture
 import com.builditcode.glass.rememberBackdropManager
+import com.builditcode.glass.rememberGlassBorderGyroscopeRotation
 import com.builditcode.liquidglass.ui.theme.LiquidGlassTheme
 import kotlin.math.PI
 import kotlin.math.max
@@ -111,6 +117,11 @@ private enum class VerificationScenario(
         tabLabel = "Sheet",
         title = "Glass bottom sheet",
         caption = "Open a large overlay glass modal"
+    ),
+    LiquidControls(
+        tabLabel = "Controls",
+        title = "Liquid controls",
+        caption = "Live glass components over animated content"
     )
 }
 
@@ -131,6 +142,7 @@ private fun VerificationApp() {
                     VerificationScenario.MovingSource -> AnimatedBackdrop()
                     VerificationScenario.MovingCardAndSource -> AnimatedBackdrop()
                     VerificationScenario.BottomSheet -> AnimatedBackdrop()
+                    VerificationScenario.LiquidControls -> AnimatedBackdrop()
                 }
             },
             foreground = {
@@ -234,6 +246,7 @@ private fun VerificationOverlay(
                 onOpen = onBottomSheetOpen,
                 onClose = onBottomSheetClose
             )
+            VerificationScenario.LiquidControls -> LiquidControlsScenario()
         }
 
         ScenarioTabs(
@@ -289,6 +302,150 @@ private fun BoxScope.TransparentBottomSheetScenario(
             fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold
         )
+    }
+}
+
+@Composable
+private fun BoxScope.LiquidControlsScenario() {
+    var query by remember { mutableStateOf("") }
+    var enabled by remember { mutableStateOf(true) }
+    var intensity by remember { mutableFloatStateOf(0.62f) }
+    val gyroBorderRotation = rememberGlassBorderGyroscopeRotation()
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            top = 128.dp,
+            bottom = 96.dp,
+            start = 24.dp,
+            end = 24.dp
+        ),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            Text(
+                text = "Liquid components",
+                color = Color.White,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "Interact with each control while the image moves behind it.",
+                color = Color.White.copy(alpha = 0.78f),
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+
+        item {
+            val shape = RoundedCornerShape(28.dp)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(86.dp)
+                    .layeredBackdropCapture(
+                        layerName = TrilevelLayers.Background,
+                        filter = BackdropFilter.Glass(
+                            shape = shape,
+                            blurRadiusIntensity = 5f,
+                            refraction = 0.2f,
+                            dispersion = 0.1f,
+                            edge = 0.2f,
+                            tint = Color.White.copy(alpha = 0.08f)
+                        )
+                    )
+                    .glassBorder(
+                        shape = shape,
+                        borderColor = Color.White,
+                        borderWidth = 1.dp,
+                        rotationDegrees = gyroBorderRotation
+                    )
+                    .padding(horizontal = 20.dp),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                Text(
+                    text = "Gyroscope border",
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+
+        item {
+            LiquidSearchBar(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = "Search apps",
+                layerName = TrilevelLayers.Background,
+                borderRotationDegrees = gyroBorderRotation,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                LiquidButton(
+                    text = if (enabled) "Enabled" else "Disabled",
+                    onClick = { enabled = !enabled },
+                    layerName = TrilevelLayers.Background,
+                    borderRotationDegrees = gyroBorderRotation,
+                    modifier = Modifier.weight(1f)
+                )
+                LiquidToggle(
+                    checked = enabled,
+                    onCheckedChange = { enabled = it },
+                    layerName = TrilevelLayers.Background,
+                    borderRotationDegrees = gyroBorderRotation
+                )
+            }
+        }
+
+        item {
+            LiquidSlider(
+                value = intensity,
+                onValueChange = { intensity = it },
+                layerName = TrilevelLayers.Background,
+                borderRotationDegrees = gyroBorderRotation,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        item {
+            LiquidCard(
+                layerName = TrilevelLayers.Background,
+                borderRotationDegrees = gyroBorderRotation,
+                modifier = Modifier.fillMaxWidth(),
+                onClick = { enabled = !enabled }
+            ) {
+                Column {
+                    Text(
+                        text = "Liquid card",
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "A glass content surface using the same capture path as the controls.",
+                        color = Color.White.copy(alpha = 0.78f),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(Modifier.height(18.dp))
+                    LiquidButton(
+                        text = "Nested action",
+                        onClick = { enabled = !enabled },
+                        layerName = TrilevelLayers.Background,
+                        borderRotationDegrees = gyroBorderRotation,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
     }
 }
 
