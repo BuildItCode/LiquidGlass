@@ -180,6 +180,8 @@ private fun LiquidSliderTrack(
                 shape = shape,
                 borderColor = colors.border.copy(alpha = 0.36f),
                 borderWidth = 1.dp,
+                gapSize = 0.01f,
+                softness = 0.02f,
                 rotationDegrees = borderRotationDegrees
             ),
         contentAlignment = Alignment.CenterStart

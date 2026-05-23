@@ -76,10 +76,10 @@ internal fun LiquidSurface(
     Box(
         modifier = surfaceModifier.glassBorder(
             shape = liquidShape,
-            borderColor = colors.border.copy(alpha = 0.32f + visuals.pressProgress * 0.24f),
+            borderColor = colors.border.copy(alpha = 0.72f + visuals.pressProgress * 0.24f),
             borderWidth = 1.dp,
-            gapSize = 0.08f,
-            softness = 0.08f,
+            gapSize = 0.03f,
+            softness = 0.05f,
             rotationDegrees = borderRotationDegrees
         ),
         contentAlignment = Alignment.Center

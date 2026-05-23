@@ -92,6 +92,8 @@ fun LiquidToggle(
                 shape = trackShape,
                 borderColor = colors.border.copy(alpha = 0.38f),
                 borderWidth = 1.dp,
+                gapSize = 0.05f,
+                softness = 0.05f,
                 rotationDegrees = borderRotationDegrees
             )
             .toggleable(
