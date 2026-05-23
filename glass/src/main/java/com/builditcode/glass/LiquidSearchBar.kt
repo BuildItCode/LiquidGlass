@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.sp
  * @param enabled Whether text input and interaction feedback are enabled.
  * @param shape Shape used for clipping, glass capture, and border drawing.
  * @param colors Colors used for text, tint, border, and glow.
+ * @param blurRadiusIntensity Blur amount used when [layerName] enables backdrop capture.
  * @param borderRotationDegrees Additional rotation for the border highlight.
  * @param interactionSource Interaction source passed to the inner text field.
  */
@@ -61,6 +62,7 @@ fun LiquidSearchBar(
     enabled: Boolean = true,
     shape: Shape = RoundedCornerShape(24.dp),
     colors: LiquidComponentColors = LiquidComponentColors(),
+    blurRadiusIntensity: Float = 5f,
     borderRotationDegrees: Float = 0f,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() }
 ) {
@@ -71,12 +73,9 @@ fun LiquidSearchBar(
         animationSpec = liquidDpSpring(),
         label = "liquid-search-height"
     )
-    val filter = remember(shape, colors.tint) {
+    val filter = remember(shape, colors.tint, blurRadiusIntensity) {
         BackdropFilter.Glass(
-            blurRadiusIntensity = 5f,
-            refraction = 0.18f,
-            dispersion = 0.08f,
-            edge = 0.16f,
+            blurRadiusIntensity = blurRadiusIntensity,
             tint = colors.tint,
             shape = shape
         )

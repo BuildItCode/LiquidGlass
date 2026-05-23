@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
  * @param layerName Optional backdrop source layer sampled by the thumb.
  * @param enabled Whether toggling and interaction feedback are enabled.
  * @param colors Colors used for track, thumb tint, border, and glow.
+ * @param blurRadiusIntensity Blur amount used by the glass thumb when [layerName] is set.
  * @param borderRotationDegrees Additional rotation for the track and thumb border highlights.
  * @param interactionSource Source used to observe pressed state.
  */
@@ -47,6 +48,7 @@ fun LiquidToggle(
     layerName: String? = null,
     enabled: Boolean = true,
     colors: LiquidComponentColors = LiquidComponentColors(),
+    blurRadiusIntensity: Float = 4f,
     borderRotationDegrees: Float = 0f,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() }
 ) {
@@ -110,7 +112,8 @@ fun LiquidToggle(
             shape = thumbShape,
             colors = colors,
             enabled = enabled,
-            borderRotationDegrees = borderRotationDegrees
+            borderRotationDegrees = borderRotationDegrees,
+            blurRadiusIntensity = blurRadiusIntensity,
         )
     }
 }

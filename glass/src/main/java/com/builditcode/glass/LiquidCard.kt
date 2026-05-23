@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.sp
  * @param shape Shape used for clipping, glass capture, and border drawing.
  * @param colors Colors used for content, tint, border, and glow.
  * @param contentPadding Padding applied inside the card.
+ * @param blurRadiusIntensity Blur amount used when [layerName] enables backdrop capture.
  * @param borderRotationDegrees Additional rotation for the border highlight.
  * @param interactionSource Source used to observe pressed state when clickable.
  * @param content Card content.
@@ -51,6 +52,7 @@ fun LiquidCard(
     shape: Shape = RoundedCornerShape(28.dp),
     colors: LiquidComponentColors = LiquidComponentColors(),
     contentPadding: PaddingValues = PaddingValues(20.dp),
+    blurRadiusIntensity: Float = 5f,
     borderRotationDegrees: Float = 0f,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
     content: @Composable BoxScope.() -> Unit
@@ -58,12 +60,9 @@ fun LiquidCard(
     val pressed by interactionSource.collectIsPressedAsState()
     val interactive = enabled && onClick != null
     val visuals = rememberLiquidInteractionVisuals(active = pressed && interactive)
-    val filter = remember(shape, colors.tint) {
+    val filter = remember(shape, colors.tint, blurRadiusIntensity) {
         BackdropFilter.Glass(
-            blurRadiusIntensity = 5f,
-            refraction = 0.2f,
-            dispersion = 0.1f,
-            edge = 0.2f,
+            blurRadiusIntensity = blurRadiusIntensity,
             tint = colors.tint,
             shape = shape
         )

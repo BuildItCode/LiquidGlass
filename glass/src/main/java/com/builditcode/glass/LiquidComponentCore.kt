@@ -37,7 +37,7 @@ data class LiquidComponentColors(
     val content: Color = Color.White,
     val secondaryContent: Color = Color.White.copy(alpha = 0.7f),
     val tint: Color = Color.White.copy(alpha = 0.08f),
-    val border: Color = Color.White.copy(alpha = 0.7f),
+    val border: Color = Color(131, 131, 131, 155),
     val glow: Color = Color(3, 169, 244, 155)
 )
 
@@ -76,7 +76,7 @@ internal fun LiquidSurface(
     Box(
         modifier = surfaceModifier.glassBorder(
             shape = liquidShape,
-            borderColor = colors.border.copy(alpha = 0.22f + visuals.pressProgress * 0.24f),
+            borderColor = colors.border.copy(alpha = 0.32f + visuals.pressProgress * 0.24f),
             borderWidth = 1.dp,
             gapSize = 0.08f,
             softness = 0.08f,
@@ -101,7 +101,7 @@ internal fun LiquidSurface(
     }
 }
 
-internal fun Modifier.liquidAsymmetricPress(visuals: LiquidInteractionVisuals): Modifier =
+fun Modifier.liquidAsymmetricPress(visuals: LiquidInteractionVisuals): Modifier =
     graphicsLayer {
         scaleX = 1f + visuals.pressProgress * 0.075f
         scaleY = 1f - visuals.pressProgress * 0.018f
@@ -116,17 +116,11 @@ internal fun LiquidGlassHandle(
     colors: LiquidComponentColors,
     enabled: Boolean,
     borderRotationDegrees: Float,
-    blurRadiusIntensity: Float = 4f,
-    refraction: Float = 0.18f,
-    dispersion: Float = 0.08f,
-    edge: Float = 0.18f
+    blurRadiusIntensity: Float = 4f
 ) {
-    val filter = remember(shape, colors.tint, blurRadiusIntensity, refraction, dispersion, edge) {
+    val filter = remember(shape, colors.tint, blurRadiusIntensity) {
         BackdropFilter.Glass(
             blurRadiusIntensity = blurRadiusIntensity,
-            refraction = refraction,
-            dispersion = dispersion,
-            edge = edge,
             tint = colors.tint,
             shape = shape
         )
@@ -201,7 +195,7 @@ internal fun rememberLiquidInteractionVisuals(active: Boolean): LiquidInteractio
     )
 }
 
-internal data class LiquidInteractionVisuals(
+data class LiquidInteractionVisuals(
     val pressProgress: Float,
     val scale: Float,
     val brightness: Float,

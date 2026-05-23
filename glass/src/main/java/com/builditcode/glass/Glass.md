@@ -406,7 +406,7 @@ LiquidCard(
 }
 ```
 
-By default these controls render without backdrop capture, which makes them usable in previews, dialogs, and ordinary Compose layouts. Pass `layerName = QuadLevelLayers.Background` or another source layer when the control is inside a layered glass scene and should sample live content behind it. Each component also accepts `borderRotationDegrees`; pass `rememberGlassBorderGyroscopeRotation()` when you want the rim highlight to react to device motion. `LiquidButton` and `LiquidCard` also have slot content for custom layouts.
+By default these controls render without backdrop capture, which makes them usable in previews, dialogs, and ordinary Compose layouts. Pass `layerName = QuadLevelLayers.Background` or another source layer when the control is inside a layered glass scene and should sample live content behind it. Each component accepts `blurRadiusIntensity` for the glass blur strength and `borderRotationDegrees` for rim rotation; pass `rememberGlassBorderGyroscopeRotation()` when you want the rim highlight to react to device motion. `LiquidButton` and `LiquidCard` also have slot content for custom layouts.
 
 ---
 

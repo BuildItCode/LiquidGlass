@@ -53,6 +53,7 @@ import kotlin.math.roundToInt
  * @param steps Number of discrete steps between the ends of [valueRange].
  * @param onValueChangeFinished Called when a drag gesture ends.
  * @param colors Colors used for track, handle tint, border, and glow.
+ * @param blurRadiusIntensity Blur amount used by the glass handle when [layerName] is set.
  * @param borderRotationDegrees Additional rotation for the track and handle border highlights.
  * @param height Total touch and layout height for the slider.
  */
@@ -67,6 +68,7 @@ fun LiquidSlider(
     steps: Int = 0,
     onValueChangeFinished: (() -> Unit)? = null,
     colors: LiquidComponentColors = LiquidComponentColors(),
+    blurRadiusIntensity: Float = 4f,
     borderRotationDegrees: Float = 0f,
     height: Dp = 52.dp
 ) {
@@ -154,6 +156,7 @@ fun LiquidSlider(
             shape = thumbShape,
             colors = colors,
             enabled = enabled,
+            blurRadiusIntensity = blurRadiusIntensity,
             borderRotationDegrees = borderRotationDegrees
         )
     }

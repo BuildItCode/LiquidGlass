@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.sp
  * @param enabled Whether clicks and interaction feedback are enabled.
  * @param shape Shape used for clipping, glass capture, and border drawing.
  * @param colors Colors used for text, tint, border, and glow.
+ * @param blurRadiusIntensity Blur amount used when [layerName] enables backdrop capture.
  * @param borderRotationDegrees Additional rotation for the border highlight.
  * @param interactionSource Source used to observe pressed state.
  */
@@ -51,6 +52,7 @@ fun LiquidButton(
     enabled: Boolean = true,
     shape: Shape = RoundedCornerShape(22.dp),
     colors: LiquidComponentColors = LiquidComponentColors(),
+    blurRadiusIntensity: Float = 4f,
     borderRotationDegrees: Float = 0f,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() }
 ) {
@@ -61,6 +63,7 @@ fun LiquidButton(
         enabled = enabled,
         shape = shape,
         colors = colors,
+        blurRadiusIntensity = blurRadiusIntensity,
         borderRotationDegrees = borderRotationDegrees,
         interactionSource = interactionSource
     ) {
@@ -103,6 +106,7 @@ fun LiquidButtonPreview() {
  * @param enabled Whether clicks and interaction feedback are enabled.
  * @param shape Shape used for clipping, glass capture, and border drawing.
  * @param colors Colors used for content, tint, border, and glow.
+ * @param blurRadiusIntensity Blur amount used when [layerName] enables backdrop capture.
  * @param borderRotationDegrees Additional rotation for the border highlight.
  * @param interactionSource Source used to observe pressed state.
  * @param content Custom centered row content.
@@ -115,6 +119,7 @@ fun LiquidButton(
     enabled: Boolean = true,
     shape: Shape = RoundedCornerShape(22.dp),
     colors: LiquidComponentColors = LiquidComponentColors(),
+    blurRadiusIntensity: Float = 4f,
     borderRotationDegrees: Float = 0f,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
     content: @Composable RowScope.() -> Unit
@@ -126,12 +131,9 @@ fun LiquidButton(
         animationSpec = liquidDpSpring(),
         label = "liquid-button-height"
     )
-    val filter = remember(shape, colors.tint) {
+    val filter = remember(shape, colors.tint, blurRadiusIntensity) {
         BackdropFilter.Glass(
-            blurRadiusIntensity = 4f,
-            refraction = 0.2f,
-            dispersion = 0.1f,
-            edge = 0.2f,
+            blurRadiusIntensity = blurRadiusIntensity,
             tint = colors.tint,
             shape = shape
         )
