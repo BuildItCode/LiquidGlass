@@ -158,13 +158,13 @@ internal fun LiquidGlassHandle(
             .clip(shape)
         Box(
             if (layerName == null) {
-                handleFill.background(colors.tint)
+                handleFill.background(colors.content)
             } else {
                 handleFill.background(
                     Brush.verticalGradient(
                         listOf(
-                            Color.White.copy(alpha = 0.74f),
-                            Color.White.copy(alpha = 0.46f)
+                            colors.content.copy(alpha = 0.74f),
+                            colors.content.copy(alpha = 0.46f)
                         )
                     )
                 )

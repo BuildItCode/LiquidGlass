@@ -22,6 +22,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.tooling.preview.PreviewLightDark
 import androidx.compose.ui.unit.dp
 
 /**
@@ -120,12 +121,7 @@ fun LiquidToggle(
     }
 }
 
-@Preview(
-    name = "LiquidToggle",
-    group = "Liquid Components",
-    showBackground = true,
-    backgroundColor = 0xFF101114
-)
+@PreviewLightDark
 @Composable
 fun LiquidTogglePreview() {
     LiquidPreviewScene {
