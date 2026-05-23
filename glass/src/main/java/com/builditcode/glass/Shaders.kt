@@ -23,7 +23,7 @@ internal val GLASS_SHADER = """
     uniform shader content;
 
     const float AA = 1.5;
-    const float REFRACTION_FALLOFF = 1.15;
+    const float REFRACTION_FALLOFF = 1;
 
     float cornerRadiusFor(float2 p, float4 radii) {
         if (p.y < 0.0) {
