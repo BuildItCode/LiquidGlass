@@ -31,6 +31,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlin.math.atan2
 
 /**
@@ -120,6 +123,10 @@ fun Modifier.glassBorder(
     }
 }
 
+private const val GlassGyroscopeMaxRotationDegrees = 42f
+private const val GlassGyroscopeSensitivity = 1.15f
+private const val GlassGyroscopeSmoothing = 0.22f
+
 /**
  * Returns a small border-rotation offset driven by device motion.
  *
@@ -131,81 +138,77 @@ fun Modifier.glassBorder(
  * Use the returned value as [glassBorder]'s `rotationDegrees`.
  */
 @Composable
-fun rememberGlassBorderGyroscopeRotation(
-    enabled: Boolean = true,
-    maxRotationDegrees: Float = 18f,
-    sensitivity: Float = 0.65f,
-    smoothing: Float = 0.18f
-): Float {
+fun rememberGlassBorderGyroscopeRotation(enabled: Boolean = true): Float {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     var rotationDegrees by remember { mutableFloatStateOf(0f) }
 
-    DisposableEffect(context, enabled, maxRotationDegrees, sensitivity, smoothing) {
+    DisposableEffect(context, lifecycleOwner, enabled) {
         if (!enabled) {
             rotationDegrees = 0f
             return@DisposableEffect onDispose { }
         }
 
         val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
-        val sensor = sensorManager?.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
-            ?: sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
-            ?: sensorManager?.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+        val sensor = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
 
         if (sensorManager == null || sensor == null) {
             rotationDegrees = 0f
             return@DisposableEffect onDispose { }
         }
 
-        val maxRotation = maxRotationDegrees.coerceAtLeast(0f)
-        val sensorSensitivity = sensitivity.coerceAtLeast(0f)
-        val blend = smoothing.coerceIn(0.02f, 1f)
-        val rotationMatrix = FloatArray(9)
-        val orientation = FloatArray(3)
-        val displayRotation = context.displayRotation()
-        var integratedRotation = 0f
-        var lastTimestamp = 0L
-
+        var registered = false
         val listener = object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent) {
-                val target = when (event.sensor.type) {
-                    Sensor.TYPE_GAME_ROTATION_VECTOR,
-                    Sensor.TYPE_ROTATION_VECTOR -> {
-                        SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
-                        SensorManager.getOrientation(rotationMatrix, orientation)
-                        val pitch = Math.toDegrees(orientation[1].toDouble()).toFloat()
-                        val roll = Math.toDegrees(orientation[2].toDouble()).toFloat()
-                        tiltToBorderRotation(
-                            pitch = pitch,
-                            roll = roll,
-                            displayRotation = displayRotation
-                        ) * sensorSensitivity
-                    }
+                val x = event.values.getOrNull(0) ?: return
+                val y = event.values.getOrNull(1) ?: return
+                val targetDegrees = Math.toDegrees(atan2(-x.toDouble(), y.toDouble()))
+                    .toFloat()
+                    .let { it * GlassGyroscopeSensitivity }
+                    .coerceIn(-GlassGyroscopeMaxRotationDegrees, GlassGyroscopeMaxRotationDegrees)
 
-                    Sensor.TYPE_GYROSCOPE -> {
-                        if (lastTimestamp != 0L) {
-                            val dtSeconds = (event.timestamp - lastTimestamp) * 0.000000001f
-                            val zVelocity = event.values.getOrNull(2) ?: 0f
-                            integratedRotation += Math.toDegrees((zVelocity * dtSeconds).toDouble()).toFloat() *
-                                sensorSensitivity
-                            integratedRotation *= 0.985f
-                        }
-                        lastTimestamp = event.timestamp
-                        integratedRotation
-                    }
-
-                    else -> 0f
-                }.coerceIn(-maxRotation, maxRotation)
-
-                rotationDegrees += (target - rotationDegrees) * blend
+                rotationDegrees += (targetDegrees - rotationDegrees) * GlassGyroscopeSmoothing
             }
 
             override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
         }
 
-        sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_GAME)
+        fun register() {
+            if (!registered) {
+                registered = sensorManager.registerListener(
+                    listener,
+                    sensor,
+                    SensorManager.SENSOR_DELAY_GAME,
+                )
+            }
+        }
+
+        fun unregister() {
+            if (registered) {
+                sensorManager.unregisterListener(listener)
+                registered = false
+            }
+        }
+
+        val lifecycleObserver = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> register()
+                Lifecycle.Event.ON_PAUSE,
+                Lifecycle.Event.ON_STOP,
+                Lifecycle.Event.ON_DESTROY -> unregister()
+
+                else -> Unit
+            }
+        }
+
+        lifecycleOwner.lifecycle.addObserver(lifecycleObserver)
+        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            register()
+        }
 
         onDispose {
-            sensorManager.unregisterListener(listener)
+            unregister()
+            lifecycleOwner.lifecycle.removeObserver(lifecycleObserver)
             rotationDegrees = 0f
         }
     }
