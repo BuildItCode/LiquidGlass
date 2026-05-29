@@ -77,7 +77,10 @@ fun LiquidSearchBar(
         BackdropFilter.Glass(
             blurRadiusIntensity = blurRadiusIntensity,
             tint = colors.tint,
-            shape = shape
+            shape = shape,
+            refraction = 0.3f,
+            edge = 0.24f,
+            dispersion = 0.24f
         )
     }
 
