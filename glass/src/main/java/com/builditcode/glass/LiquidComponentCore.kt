@@ -51,6 +51,8 @@ internal fun LiquidSurface(
     visuals: LiquidInteractionVisuals,
     enabled: Boolean,
     borderRotationDegrees: Float,
+    gapSize: Float = 0.08f,
+    softness: Float = 0.06f,
     content: @Composable BoxScope.() -> Unit
 ) {
     val liquidShape = LiquidMorphShape(
@@ -78,8 +80,8 @@ internal fun LiquidSurface(
             shape = liquidShape,
             borderColor = colors.border.copy(alpha = 0.7f + visuals.pressProgress * 0.24f),
             borderWidth = 1.dp,
-            gapSize = 0.08f,
-            softness = 0.06f,
+            gapSize = gapSize,
+            softness = softness,
             rotationDegrees = borderRotationDegrees
         ),
         contentAlignment = Alignment.Center

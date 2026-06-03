@@ -105,7 +105,8 @@ fun LiquidSearchBar(
         colors = colors,
         visuals = visuals,
         enabled = enabled,
-        borderRotationDegrees = borderRotationDegrees
+        borderRotationDegrees = borderRotationDegrees,
+        gapSize = 0.04f
     ) {
         BasicTextField(
             value = value,
