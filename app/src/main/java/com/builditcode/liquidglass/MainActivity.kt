@@ -134,7 +134,6 @@ private fun VerificationApp() {
         TriLevelLayout(
             modifier = Modifier.fillMaxSize(),
             scaleFactor = 0.5f,
-            debounceMs = 32L,
             background = {
                 when (scenario) {
                     VerificationScenario.InitialImage -> HardwareImageBackdrop()
@@ -182,7 +181,7 @@ private fun HardwareImageBackdrop(
     AsyncImage(
         model = ImageRequest.Builder(LocalContext.current)
             .data(R.drawable.img_test)
-            .allowHardware(true)
+            .allowHardware(false)
             .build(),
         contentDescription = null,
         contentScale = ContentScale.Crop,

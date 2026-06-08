@@ -1,28 +1,30 @@
 # Glass Backdrop Effect
 
-Part of the Lucid design system. A Jetpack Compose toolkit for real-time frosted glass and blur effects: glass panels sample the live UI behind them, including scrolling content, animated content, moving capture regions, and hardware-backed images, and apply shader effects with no manual state wiring required.
+Part of the Lucid design system. A Jetpack Compose toolkit for real-time frosted glass and blur effects: glass panels sample the live UI behind them, including scrolling content, animated content, and moving capture regions, and apply shader effects with no manual state wiring required.
 
 ## How It Works
 
 The system has two sides:
 
-- **Source** - a `Modifier.Node` that records the pixels that glass surfaces are allowed to sample.
-- **Capture** - a `Modifier.Node` that crops the current source capture to its on-screen region, keeps that crop up to date as the source or capture node moves, and applies blur or glass through the best available path for the current API level.
+- **Source** — `Modifier.layeredBackdropSource(name)` captures the pixels behind glass surfaces into a downscaled, double-buffered bitmap and publishes it to a shared `BackdropLayerManager`.
+- **Capture** — `Modifier.layeredBackdropCapture(name, ...)` reads the published capture live in its own draw phase, positions it under its on-screen region, and applies blur or glass.
 
-Both modifiers are implemented as `Modifier.Node` (no recomposition overhead). Recapture is driven implicitly by the draw phase: any time a source's `draw()` is re-invoked (e.g. its child content scrolls or animates), the source queues a fresh capture after the manager's debounce interval.
+Both are ordinary `Modifier` chains (built with `composed`). A consumer redraws when the source publishes new pixels — a static source publishes rarely, an animated one each frame — and it re-samples the source at its own live on-screen position every frame as it scrolls, so the backdrop stays frame-aligned with no lag and no manual triggers.
 
 Multiple named layers can coexist. A foreground card can sample a `"Background"` layer, and an overlay sheet can sample a `"Foreground"` layer that contains the background plus non-glass foreground UI.
 
-Glass surfaces can be captured by higher source layers, so blur-over-blur and glass-over-glass layouts are supported. The only blocked case is true same-source feedback, where a capture tries to sample the source currently recording itself.
+Glass surfaces drawn into a higher source layer can themselves be sampled, so blur-over-blur and glass-over-glass layouts work. The only blocked case is true same-source feedback: a capture must not sample the source that contains it.
 
 `TriLevelLayout` exposes its built-in names through `TrilevelLayers`: `Background`, `Foreground`, and `Overlay`. `QuadLevelLayout` exposes `QuadLevelLayers`: `Background`, `Midground`, `Foreground`, and `Overlay`.
 
-### Capture backends
+### Effect backends
 
-| API level | Capture path | Effect path |
-|-----------|--------------|-------------|
-| API 33+ | Retained `GraphicsLayer` source capture kept on the GPU. | Platform `RenderEffect` blur and AGSL Glass shader. |
-| API 24-32 | Downscaled `Picture` bitmap capture for software-renderable content; automatic hardware snapshot fallback when software capture cannot draw the source. | CPU blur plus CPU refraction/edge/tint fallback for Glass. |
+| API level | Effect path |
+|-----------|-------------|
+| API 33+   | Source sampled live and filtered on the GPU: platform `RenderEffect` blur and the AGSL Glass shader (refraction, dispersion, edge, tint). |
+| API 24-32 | Source cropped and filtered on the CPU: Stack Blur plus CPU refraction/edge/tint for Glass (dispersion is AGSL-only). |
+
+> The source is always captured into a software bitmap, so source content must be software-renderable. For images, decode without a hardware bitmap (for example Coil's `allowHardware(false)`).
 
 ---
 
@@ -34,8 +36,7 @@ In your root composable (e.g. `MainActivity`), create and provide a `BackdropLay
 
 ```kotlin
 val backdropManager = rememberBackdropManager(
-    defaultScaleFactor = 0.4f,   // capture at 40% resolution (performance vs quality)
-    defaultDebounceMs  = 16L     // minimum ms between full re-captures (~60fps)
+    defaultScaleFactor = 0.5f,   // capture at 50% resolution (performance vs quality)
 )
 
 CompositionLocalProvider(LocalBackdropLayerManager provides backdropManager) {
@@ -57,9 +58,9 @@ Box(
 }
 ```
 
-Recapture is driven by Compose's draw phase: any redraw of the source subtree (a scrolling `LazyColumn`, an animating child, a state change) re-runs the source's `draw()`, which queues a fresh capture after the manager's debounce interval. You don't need to pass `LazyListState` or any explicit triggers. If the pixels under the source change, a recapture is queued.
+Recapture is driven by Compose's draw phase: any redraw of the source subtree (a scrolling `LazyColumn`, an animating child, a state change) re-runs the source's draw and republishes its pixels. You don't need to pass `LazyListState` or any explicit triggers — if what's under the source changes, the next draw captures it.
 
-If the source contains hardware-backed content such as a Compose image decoded with a hardware bitmap, it is supported automatically. API 33+ keeps the source capture as a GPU layer. API 24-32 starts with the lower-overhead software bitmap path and promotes to a hardware snapshot only when Android reports that the content cannot be drawn into a software canvas.
+The source is captured into a software bitmap, so its content must be software-renderable. If you display images, decode them without a hardware bitmap (for example Coil's `allowHardware(false)`); a hardware bitmap cannot be drawn into the software capture canvas.
 
 ### 3. Add glass panels
 
@@ -99,15 +100,13 @@ The capture panel can be captured by a later source layer for blur-over-blur eff
 ```kotlin
 @Composable
 fun rememberBackdropManager(
-    defaultScaleFactor: Float = 0.4f,
-    defaultDebounceMs: Long   = 32L
+    defaultScaleFactor: Float = 0.5f
 ): BackdropLayerManager
 ```
 
 | Parameter | Description |
 |-----------|-------------|
-| `defaultScaleFactor` | Resolution scale for internal bitmaps. `0.4` = 40% of screen size. Lower = faster, blurrier captures. |
-| `defaultDebounceMs` | Minimum delay between full re-captures. `16` = every frame at 60fps. `32` = every other frame. |
+| `defaultScaleFactor` | Resolution scale for capture bitmaps. `0.5` = 50% of source size. Lower = faster, blurrier captures. |
 
 ---
 
@@ -117,11 +116,9 @@ fun rememberBackdropManager(
 fun Modifier.layeredBackdropSource(layerName: String): Modifier
 ```
 
-Marks this composable as the pixel source for the named layer. The node intercepts `ContentDrawScope.draw()`, draws content to screen normally, and then, if the manager has pending capture requests, records the same draw into the active capture backend.
+Marks this composable as the pixel source for the named layer. It draws content to screen normally, then captures the same draw into a downscaled, double-buffered bitmap and publishes it to the manager.
 
-The on-screen draw always runs first, so a slow or skipped capture never drops a frame of normal rendering.
-
-On API 33+, the source is captured into a retained `GraphicsLayer` and consumed by GPU effects. On API 24-32, software-renderable sources use a downscaled bitmap path; hardware-backed content automatically falls back to a hardware snapshot and is then processed through the legacy bitmap effect path.
+The on-screen draw always runs first, so the capture never drops a frame of normal rendering. The capture is a software bitmap on every API level, so source content must be software-renderable.
 
 ---
 
@@ -147,7 +144,7 @@ The capture should sample a source below it. Captures can be included in later s
 | `shape` | Optional clip shape override. If omitted, `filter.shape` is used for both clipping and shader edge math. |
 | `padding` | Inset the blur region if needed. |
 | `filter` | The visual effect to apply: `Blur` or `Glass`. |
-| `autoInvalidateOnMove` | When `true`, movement requests a capture only if the moved region cannot be satisfied from the current source capture. |
+| `autoInvalidateOnMove` | When `true`, the component re-samples its layer as it moves so the crop tracks its new position. |
 
 ---
 
@@ -197,13 +194,13 @@ Standard backdrop blur with optional tint.
 
 ```kotlin
 BackdropFilter.Blur(
-    shape = RoundedCornerShape(16.dp),
-    blurRadiusIntensity = 5f,            // 0.0-10.0
-    tint = Color.White.copy(alpha = 0.05f)
+    radius = 20.dp,                       // blur radius
+    tint  = Color.White.copy(alpha = 0.05f),
+    shape = RoundedCornerShape(16.dp)
 )
 ```
 
-**API compatibility:** Platform `RenderEffect` blur on API 33+. API 24-32 uses the legacy CPU Stack Blur fallback.
+**API compatibility:** Platform `RenderEffect` blur on API 33+. API 24-32 uses the CPU Stack Blur fallback.
 
 ---
 
@@ -237,7 +234,7 @@ BackdropFilter.Glass(
 
 ```kotlin
 // MainActivity.kt
-val backdropManager = rememberBackdropManager(defaultDebounceMs = 16)
+val backdropManager = rememberBackdropManager()
 
 CompositionLocalProvider(LocalBackdropLayerManager provides backdropManager) {
     Box(modifier = Modifier.fillMaxSize()) {
@@ -424,23 +421,20 @@ val manager = LocalBackdropLayerManager.current!!
 manager.stopUpdates()
 
 // When the overlay dismisses:
-manager.startUpdates()  // resumes captures and triggers a one-shot refresh
+manager.startUpdates()  // resumes captures
 ```
 
-While `shouldUpdate` is `false`, source nodes skip snapshot recording. Capture nodes keep reading the most recent `CaptureResult`, so existing glass surfaces stay visually stable against the frozen snapshot.
+While `shouldUpdate` is `false`, sources skip publishing new captures. Capture surfaces keep sampling the most recent published image, so existing glass stays visually stable against the frozen snapshot.
 
 ---
 
 ## Performance Notes
 
-- **Scale factor**: The single biggest lever. `0.4f` (default) gives a good blur with ~6× fewer pixels to process than full resolution. Drop to `0.3f` for more aggressive savings on heavy scenes.
-- **Debounce**: `32ms` is the manager default (~30 fps). Drop to `16ms` for 60 fps recapture if the background animates continuously, or raise it if the background changes rarely.
-- **API 33+ capture**: Sources are recorded into retained GPU `GraphicsLayer`s, then filtered with platform blur and AGSL. This avoids CPU bitmap copies for hardware-backed images and videos.
-- **API 24-32 fallback**: Software-renderable layers use the lower-overhead `Picture` bitmap path with bitmap reuse. If the source contains hardware-backed content, the layer promotes to a hardware snapshot and then uses the same legacy bitmap effect path.
-- **Legacy effects**: `BackdropFilter.Blur` and `BackdropFilter.Glass` both use CPU processing on API 24-32. Legacy Glass keeps blur, refraction, edge distortion, and tint, but dispersion is AGSL-only.
-- **Source scope**: Keep the source subtree scoped to the pixels that glass panels actually need. Capturing an entire launcher page at high scale during continuous animation is still real work, even on API 33+.
-- **Shader compilation**: `BackdropFilter.Glass` compiles its AGSL shader lazily on first draw and caches it on the filter instance. Prefer stable remembered filter instances when parameters are not changing.
-- **`autoInvalidateOnMove`**: When a glass capture node moves on screen, it invalidates *other* layers (excluding its own) so layered sources stay in sync during drag. Disable it if you have many capture nodes that move independently and you do not need other layers to track them.
+- **Scale factor**: The single biggest lever. `0.5f` (default) blurs with ~4× fewer pixels than full resolution. Drop to `0.3f`-`0.4f` for more aggressive savings on heavy scenes.
+- **API 33+ effects**: The source bitmap is sampled live and filtered with platform blur and the AGSL shader on the GPU. The built `RenderEffect` is cached and only rebuilt when the size or filter parameters change.
+- **API 24-32 effects**: `BackdropFilter.Blur` and `BackdropFilter.Glass` are processed on the CPU. The cropped + blurred result is cached and only recomputed when the sampled image, region, or filter changes. Glass keeps blur, refraction, edge, and tint; dispersion is AGSL-only.
+- **Source scope**: Keep the source subtree scoped to the pixels that glass panels actually need. Capturing an entire page at high scale during continuous animation is still real work, even on API 33+.
+- **Shader compilation**: the AGSL Glass shader compiles lazily on first draw. Prefer stable, remembered filter instances when parameters are not changing so the cached effect can be reused.
 - **Overscroll**: Disable the stretch/glow overscroll effect when using glass over a `LazyColumn` to avoid visual artifacts: wrap the list in `CompositionLocalProvider(LocalOverscrollFactory provides null)`.
 - **Drag state**: Use `mutableFloatStateOf` for drag offsets (`offsetX`, `offsetY`) to avoid boxing `Float` on every pointer event.
 - **Modal overlays**: Put modal glass in a later overlay layer that samples the source beneath it. Use `manager.stopUpdates()` / `startUpdates()` only when you intentionally want a frozen backdrop.

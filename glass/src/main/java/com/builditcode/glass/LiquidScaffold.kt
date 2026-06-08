@@ -111,12 +111,10 @@ class LiquidScaffoldScope internal constructor(
  */
 @Composable
 fun rememberLiquidScaffoldState(
-    scaleFactor: Float = 0.6f,
-    debounceMs: Long = 32L
+    scaleFactor: Float = 0.5f
 ): LiquidScaffoldState {
     val manager = rememberBackdropManager(
-        defaultScaleFactor = scaleFactor,
-        defaultDebounceMs = debounceMs
+        defaultScaleFactor = scaleFactor
     )
     return remember(manager) { LiquidScaffoldState(manager) }
 }

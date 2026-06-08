@@ -56,13 +56,12 @@ object QuadLevelLayers {
 fun TriLevelLayout(
     modifier: Modifier = Modifier,
     scaleFactor: Float = 0.6f,
-    debounceMs: Long = 32L,
     manager: BackdropLayerManager? = null,
     background: @Composable () -> Unit,
     foreground: @Composable () -> Unit,
     overlay: @Composable () -> Unit
 ) {
-    val manager = manager ?: rememberBackdropManager(scaleFactor, defaultDebounceMs = debounceMs)
+    val manager = manager ?: rememberBackdropManager(scaleFactor)
 
     CompositionLocalProvider(
         LocalBackdropLayerManager provides manager
@@ -112,14 +111,13 @@ fun TriLevelLayout(
 fun QuadLevelLayout(
     modifier: Modifier = Modifier,
     scaleFactor: Float = 0.6f,
-    debounceMs: Long = 32L,
     manager: BackdropLayerManager? = null,
     background: @Composable () -> Unit,
     midground: @Composable () -> Unit,
     foreground: @Composable () -> Unit,
     overlay: @Composable () -> Unit
 ) {
-    val manager = manager ?: rememberBackdropManager(scaleFactor, defaultDebounceMs = debounceMs)
+    val manager = manager ?: rememberBackdropManager(scaleFactor)
 
     CompositionLocalProvider(
         LocalBackdropLayerManager provides manager

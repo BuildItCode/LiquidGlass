@@ -1,6 +1,6 @@
 # Liquid Glass
 
-A Jetpack Compose library for real-time frosted glass, blur, and refractive glass effects. Glass panels sample the live UI behind them, including scrolling content, animations, drag gestures, and hardware-backed images, and apply shader effects with no manual state wiring.
+A Jetpack Compose library for real-time frosted glass, blur, and refractive glass effects. Glass panels sample the live UI behind them, including scrolling content, animations, and drag gestures, and apply shader effects with no manual state wiring.
 
 Part of the **Lucid** design system.
 
@@ -9,11 +9,11 @@ Part of the **Lucid** design system.
 ## Features
 
 - **Live sampling** — glass surfaces capture and refract the pixels under them, including scroll, animation, and moving capture regions.
-- **Hardware-backed content** — hardware bitmaps and other hardware-rendered Compose content are supported automatically; no caller-provided hardware flag is required.
+- **Frame-aligned** — the source is sampled in the capture's own draw phase, so a scrolling panel re-samples at its exact live position every frame with no lag.
 - **Physically-based shader** — AGSL glass effect with refraction, chromatic dispersion, and edge rim lighting.
 - **Layered glass** — named source layers let foreground and overlay glass sample the exact content beneath them, including already-rendered glass from lower layers.
-- **API 24+** — GPU layer capture with platform blur and AGSL glass on API 33+, legacy bitmap capture with CPU blur/refraction/edge fallback on API 24-32.
-- **Zero recomposition overhead** — implemented as `Modifier.Node`, not composables.
+- **API 24+** — GPU-filtered blur and AGSL glass on API 33+, CPU blur/refraction/edge fallback on API 24-32; the source is captured into a software bitmap on all levels.
+- **Automatic updates** — glass refreshes when the source content changes or when the panel moves; idle scenes over a static source stay cheap.
 - **Sweep-gradient glass border** — optional `Modifier.glassBorder` for the rim-of-glass highlight you get when light catches a physical edge.
 
 ---
@@ -62,7 +62,6 @@ The Git release tag is `v0.2.5`; the JitPack dependency version is `0.2.5`.
 setContent {
     val manager = rememberBackdropManager(
         defaultScaleFactor = 0.5f,   // capture at 50% resolution
-        defaultDebounceMs  = 16L     // ~60fps recapture
     )
 
     CompositionLocalProvider(LocalBackdropLayerManager provides manager) {
@@ -127,8 +126,8 @@ The `:app` module in this repo is a verification app for the capture paths: init
 - **Min SDK:** 24
 - **Compose BOM:** 2026.02.01+ (tested)
 - **Kotlin:** 2.2+
-- **Best experience:** API 33+ for GPU layer capture, platform blur, and full AGSL glass. API 24-32 uses the legacy bitmap fallback with CPU blur/refraction.
-- **Hardware content:** Compose-rendered hardware bitmaps are supported automatically. API 33+ keeps the capture on the GPU; API 24-32 falls back to a hardware snapshot when software capture cannot render the source.
+- **Best experience:** API 33+ for GPU-filtered blur and full AGSL glass. API 24-32 uses the CPU fallback (blur + refraction/edge; dispersion is AGSL-only).
+- **Source content:** captured into a software bitmap, so it must be software-renderable — decode images without a hardware bitmap (e.g. Coil's `allowHardware(false)`).
 
 ---
 
