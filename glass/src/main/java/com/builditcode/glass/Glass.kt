@@ -2,8 +2,6 @@ package com.builditcode.glass
 
 import android.graphics.Bitmap
 import android.graphics.Paint as AndroidPaint
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffXfermode
 import android.graphics.Rect as AndroidRect
 import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
@@ -15,8 +13,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -99,7 +97,14 @@ fun rememberBackdropManager(
 class BackdropLayerManager(
     val defaultScaleFactor: Float = 0.5f
 ) {
-    private val captures = mutableStateMapOf<String, BackdropLayerCapture>()
+    // Each layer gets its own MutableState so a consumer sampling layer A only recomposes when layer A
+    // republishes — not when some other layer updates. A shared SnapshotStateMap tracks reads coarsely
+    // and would notify every consumer on any key change. The outer map is only touched on the main
+    // thread (composition + draw recording), so a plain map is safe.
+    private val captures = mutableMapOf<String, MutableState<BackdropLayerCapture?>>()
+
+    private fun stateFor(layerName: String): MutableState<BackdropLayerCapture?> =
+        captures.getOrPut(layerName) { mutableStateOf(null) }
 
     /**
      * When false, [setCapture] is ignored so the last captured image stays frozen — e.g. while an
@@ -124,9 +129,9 @@ class BackdropLayerManager(
      * recapturing. Used when a consumer moves and must re-sample even though the source is unchanged.
      */
     fun invalidate(layerName: String) {
-        captures[layerName]?.let { capture ->
-            captures[layerName] = capture.copy(version = capture.version + 1)
-        }
+        val state = captures[layerName] ?: return
+        val current = state.value ?: return
+        state.value = current.copy(version = current.version + 1)
     }
 
     /**
@@ -146,15 +151,17 @@ class BackdropLayerManager(
         scaleFactor: Float
     ) {
         if (!shouldUpdate) return
-        val nextVersion = (captures[layerName]?.version ?: 0) + 1
-        captures[layerName] = BackdropLayerCapture(image, positionInRoot, scaleFactor, nextVersion)
+        val state = stateFor(layerName)
+        val nextVersion = (state.value?.version ?: 0) + 1
+        state.value = BackdropLayerCapture(image, positionInRoot, scaleFactor, nextVersion)
     }
 
     /** Returns the latest capture published for [layerName], or null if none exists yet. */
-    fun getLayerCapture(layerName: String): BackdropLayerCapture? = captures[layerName]
+    fun getLayerCapture(layerName: String): BackdropLayerCapture? = stateFor(layerName).value
 
     /** Drops all captures. Call when the manager leaves the composition. */
     fun disposeAll() {
+        captures.values.forEach { it.value = null }
         captures.clear()
     }
 }
@@ -273,6 +280,7 @@ fun Modifier.layeredBackdropCapture(
                                 filterQuality = FilterQuality.Medium
                             )
                         }
+                        if (filter.tint != Color.Transparent) drawRect(filter.tint)
                     }
                 }
             }
@@ -584,49 +592,34 @@ private fun ImageBitmap.cropPixels(left: Int, top: Int, cropWidth: Int, cropHeig
     return result
 }
 
-/** Applies the CPU equivalent of [filter] — stack blur, plus refraction for glass — onto a copy. */
+/**
+ * Applies the CPU equivalent of [filter] — stack blur, plus refraction for glass — in place on the
+ * receiver. The tint is not baked in here; both the CPU and GPU-blur paths draw it as a rect over the
+ * result (and the GPU glass path mixes it in the shader), so there is a single tint path per backend.
+ */
 private fun Bitmap.applyBackdropFilter(filter: BackdropFilter, density: Density): Bitmap {
-    val working = copy(config ?: Bitmap.Config.ARGB_8888, true)
+    // The receiver is the freshly cropped, exclusively-owned mutable bitmap from cropPixels, so we
+    // blur/refract it in place — no defensive copy. The crop becomes the result.
     when (filter) {
         is BackdropFilter.Blur -> {
             val radiusPx = with(density) { filter.radius.toPx() }.roundToInt()
-            if (radiusPx > 0) applyStackBlur(working, radiusPx)
-            working.applyTint(filter.tint)
+            if (radiusPx > 0) applyStackBlur(this, radiusPx)
         }
 
         is BackdropFilter.Glass -> {
             val radiusPx = (filter.blurRadiusIntensity * density.density).roundToInt()
-            if (radiusPx > 0) applyStackBlur(working, radiusPx)
-            val pixelCount = working.width * working.height
+            if (radiusPx > 0) applyStackBlur(this, radiusPx)
+            val pixelCount = width * height
             applyCpuGlassRefraction(
-                bitmap = working,
+                bitmap = this,
                 refraction = filter.refraction,
                 edge = filter.edge,
                 pixels = IntArray(pixelCount),
                 output = IntArray(pixelCount)
             )
-            working.applyTint(filter.tint)
         }
     }
-    return working
-}
-
-/** Draws [tint] over the whole bitmap; no-op when fully transparent. */
-private fun Bitmap.applyTint(tint: Color) {
-    if (tint.alpha <= 0f) return
-
-    val canvas = android.graphics.Canvas(this)
-    val paint = AndroidPaint().apply {
-        color = android.graphics.Color.argb(
-            (tint.alpha * 255).roundToInt().coerceIn(0, 255),
-            (tint.red * 255).roundToInt().coerceIn(0, 255),
-            (tint.green * 255).roundToInt().coerceIn(0, 255),
-            (tint.blue * 255).roundToInt().coerceIn(0, 255)
-        )
-        xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_OVER)
-    }
-    canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
-    paint.xfermode = null
+    return this
 }
 
 
@@ -654,6 +647,9 @@ sealed interface BackdropFilter {
     /** Clip (and, for glass, refraction) shape, or null to use the modifier's own shape. */
     val shape: Shape?
 
+    /** Color overlaid on the sampled backdrop — drawn over it (Blur) or mixed in the shader (Glass). */
+    val tint: Color
+
     /**
      * A plain Gaussian blur of the sampled backdrop.
      *
@@ -664,7 +660,7 @@ sealed interface BackdropFilter {
     @Stable
     data class Blur(
         val radius: Dp = 20.dp,
-        val tint: Color = Color.Transparent,
+        override val tint: Color = Color.Transparent,
         override val shape: Shape? = null
     ) : BackdropFilter
 
@@ -686,7 +682,7 @@ sealed interface BackdropFilter {
         val refraction: Float = 0.2f,
         val dispersion: Float = 0.2f,
         val edge: Float = 0.25f,
-        val tint: Color = Color.Transparent,
+        override val tint: Color = Color.Transparent,
         override val shape: Shape? = null
     ) : BackdropFilter
 }
