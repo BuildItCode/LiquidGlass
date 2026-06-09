@@ -100,13 +100,15 @@ The capture panel can be captured by a later source layer for blur-over-blur eff
 ```kotlin
 @Composable
 fun rememberBackdropManager(
-    defaultScaleFactor: Float = 0.5f
+    defaultScaleFactor: Float = 0.5f,
+    maxCaptureFps: Int = 60
 ): BackdropLayerManager
 ```
 
 | Parameter | Description |
 |-----------|-------------|
 | `defaultScaleFactor` | Resolution scale for capture bitmaps. `0.5` = 50% of source size. Lower = faster, blurrier captures. |
+| `maxCaptureFps` | Caps how often a source re-captures during continuous movement (and therefore how often consumers re-blur). `60` stops 90/120 Hz displays from capturing every frame; `0` uncaps it. The on-screen content still draws every frame — only the offscreen capture is rate-limited. |
 
 ---
 
@@ -431,6 +433,7 @@ While `shouldUpdate` is `false`, sources skip publishing new captures. Capture s
 ## Performance Notes
 
 - **Scale factor**: The single biggest lever. `0.5f` (default) blurs with ~4× fewer pixels than full resolution. Drop to `0.3f`-`0.4f` for more aggressive savings on heavy scenes.
+- **Capture rate cap**: `maxCaptureFps` (default `60`) rate-limits source captures, so a continuously animating source on a 90/120 Hz display captures and re-blurs at ~60 fps instead of every frame. The on-screen content still renders at full refresh — only the offscreen capture is throttled. A *static* source is never re-captured regardless (Compose only redraws it when its content changes), and an unchanged capture is never re-blurred (the result is cached per source/region/filter).
 - **API 33+ effects**: The source bitmap is sampled live and filtered with platform blur and the AGSL shader on the GPU. The built `RenderEffect` is cached and only rebuilt when the size or filter parameters change.
 - **API 24-32 effects**: `BackdropFilter.Blur` and `BackdropFilter.Glass` are processed on the CPU. The cropped + blurred result is cached and only recomputed when the sampled image, region, or filter changes. Glass keeps blur, refraction, edge, and tint; dispersion is AGSL-only.
 - **Source scope**: Keep the source subtree scoped to the pixels that glass panels actually need. Capturing an entire page at high scale during continuous animation is still real work, even on API 33+.

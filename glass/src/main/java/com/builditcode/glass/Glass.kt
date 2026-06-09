@@ -1,6 +1,8 @@
 package com.builditcode.glass
 
 import android.graphics.Bitmap
+import android.graphics.BlendMode
+import android.graphics.BlendModeColorFilter
 import android.graphics.Paint as AndroidPaint
 import android.graphics.Rect as AndroidRect
 import android.graphics.RenderEffect
@@ -36,6 +38,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.draw
 import androidx.compose.ui.graphics.drawscope.scale
@@ -72,13 +75,17 @@ val LocalBackdropLayerManager = staticCompositionLocalOf<BackdropLayerManager?> 
  *
  * @param defaultScaleFactor Resolution scale (0..1) every layer captures at; lower is cheaper but
  * blurrier.
+ * @param maxCaptureFps Caps how often a source re-captures (and thus how often consumers re-blur)
+ * during continuous movement. `60` keeps high-refresh displays from capturing at 90/120 Hz; `0`
+ * uncaps it.
  */
 @Composable
 fun rememberBackdropManager(
     defaultScaleFactor: Float = 0.5f,
+    maxCaptureFps: Int = 60,
 ): BackdropLayerManager {
-    val manager = remember(defaultScaleFactor) {
-        BackdropLayerManager(defaultScaleFactor)
+    val manager = remember(defaultScaleFactor, maxCaptureFps) {
+        BackdropLayerManager(defaultScaleFactor, maxCaptureFps)
     }
     DisposableEffect(manager) { onDispose { manager.disposeAll() } }
     return manager
@@ -92,11 +99,21 @@ fun rememberBackdropManager(
  * by [TriLevelLayout]/[QuadLevelLayout] through [rememberBackdropManager].
  *
  * @property defaultScaleFactor Resolution scale (0..1) sources capture at; applied to every layer.
+ * @param maxCaptureFps Caps source re-capture frequency; see [rememberBackdropManager].
  */
 @Stable
 class BackdropLayerManager(
-    val defaultScaleFactor: Float = 0.5f
+    val defaultScaleFactor: Float = 0.5f,
+    maxCaptureFps: Int = 60
 ) {
+    /**
+     * Minimum nanoseconds between captures for a source, derived from `maxCaptureFps` (with a small
+     * tolerance so a display running exactly at the cap isn't dropped to half-rate). 0 = uncapped.
+     */
+    val minCaptureIntervalNanos: Long =
+        if (maxCaptureFps <= 0) 0L
+        else (1_000_000_000L / maxCaptureFps - 2_000_000L).coerceAtLeast(0L)
+
     // Each layer gets its own MutableState so a consumer sampling layer A only recomposes when layer A
     // republishes — not when some other layer updates. A shared SnapshotStateMap tracks reads coarsely
     // and would notify every consumer on any key change. The outer map is only touched on the main
@@ -187,6 +204,7 @@ fun Modifier.layeredBackdropSource(layerName: String): Modifier = composed {
         .captureToBitmapCached(
             captureEnabled = manager.shouldUpdate,
             scaleFactor = manager.defaultScaleFactor,
+            minCaptureIntervalNanos = manager.minCaptureIntervalNanos,
             onBitmapCaptured = { bitmap ->
                 manager.setCapture(
                     layerName = layerName,
@@ -279,7 +297,6 @@ fun Modifier.layeredBackdropCapture(
                                 filterQuality = FilterQuality.Medium
                             )
                         }
-                        if (filter.tint != Color.Transparent) drawRect(filter.tint)
                     }
                 }
             }
@@ -295,11 +312,15 @@ fun Modifier.layeredBackdropCapture(
  * @param onBitmapCaptured Receives the freshly captured bitmap on each draw while [captureEnabled].
  * @param captureEnabled When false the content draws normally but nothing is captured.
  * @param scaleFactor Capture resolution scale, coerced to 0.05..1.
+ * @param minCaptureIntervalNanos Minimum time between captures. The on-screen content always draws;
+ * only the (expensive) offscreen capture is rate-limited, so on a high-refresh display a continuously
+ * animating source captures at the cap instead of every frame. 0 captures on every draw.
  */
 fun Modifier.captureToBitmapCached(
     onBitmapCaptured: (ImageBitmap) -> Unit,
     captureEnabled: Boolean = false,
-    scaleFactor: Float = 1f
+    scaleFactor: Float = 1f,
+    minCaptureIntervalNanos: Long = 0L
 ): Modifier = drawWithCache {
     val captureScale = scaleFactor.coerceIn(0.05f, 1f)
     val bitmapWidth = (size.width * captureScale).roundToInt().coerceAtLeast(1)
@@ -314,21 +335,31 @@ fun Modifier.captureToBitmapCached(
     // nothing here.
     val canvases = Array(buffers.size) { Canvas(buffers[it]) }
     var next = 0
+    var lastCaptureNanos = 0L
+    var hasCaptured = false
 
     onDrawWithContent {
         drawContent()
 
         if (captureEnabled) {
-            val index = next
-            next = (next + 1) % buffers.size
-            val bitmap = buffers[index]
-            bitmap.asAndroidBitmap().eraseColor(android.graphics.Color.TRANSPARENT)
-            draw(this, layoutDirection, canvases[index], size) {
-                scale(captureScale, captureScale, pivot = Offset.Zero) {
-                    this@onDrawWithContent.drawContent()
+            // Rate-limit the offscreen capture. Compose only re-runs this when the source actually
+            // redraws, so a static source is never re-captured; this just caps how fast an animating
+            // one re-captures (and thus how fast consumers re-blur).
+            val now = System.nanoTime()
+            if (!hasCaptured || now - lastCaptureNanos >= minCaptureIntervalNanos) {
+                hasCaptured = true
+                lastCaptureNanos = now
+                val index = next
+                next = (next + 1) % buffers.size
+                val bitmap = buffers[index]
+                bitmap.asAndroidBitmap().eraseColor(android.graphics.Color.TRANSPARENT)
+                draw(this, layoutDirection, canvases[index], size) {
+                    scale(captureScale, captureScale, pivot = Offset.Zero) {
+                        this@onDrawWithContent.drawContent()
+                    }
                 }
+                onBitmapCaptured(bitmap)
             }
-            onBitmapCaptured(bitmap)
         }
     }
 }
@@ -366,7 +397,7 @@ private fun ContentDrawScope.drawGpuBackdrop(
         }
     }
     layer.renderEffect = when (val f = filter) {
-        is BackdropFilter.Blur -> effectCache.blur(f.radius.toPx())
+        is BackdropFilter.Blur -> effectCache.blur(f.radius.toPx(), f.tint)
         is BackdropFilter.Glass -> effectCache.glass(
             width = size.width,
             height = size.height,
@@ -378,24 +409,40 @@ private fun ContentDrawScope.drawGpuBackdrop(
         )
     }
     drawLayer(layer)
-    (filter as? BackdropFilter.Blur)?.tint?.let { drawRect(it) }
 }
 
 /** Caches the GPU [RenderEffect] so it is only rebuilt when the size or filter actually changes. */
 private class GlassEffectCache {
-    private var blurKey = Float.NaN
+    private var blurPxKey = Float.NaN
+    private var blurTintKey: Color = Color.Unspecified
     private var blurEffect: androidx.compose.ui.graphics.RenderEffect? = null
 
-    /** Returns the cached blur effect for [blurPx], rebuilding only when it changes (null when <= 0). */
+    /**
+     * Returns the cached blur effect for [blurPx] with [tint] applied *inside* the effect (a SRC_OVER
+     * color filter on the blurred result, not a flat overlay rect), rebuilding only when either input
+     * changes. Null when there is neither blur nor tint.
+     */
     @RequiresApi(Build.VERSION_CODES.S)
-    fun blur(blurPx: Float): androidx.compose.ui.graphics.RenderEffect? {
-        if (blurKey != blurPx) {
-            blurEffect = if (blurPx > 0f) {
-                RenderEffect.createBlurEffect(blurPx, blurPx, Shader.TileMode.CLAMP).asComposeRenderEffect()
+    fun blur(blurPx: Float, tint: Color): androidx.compose.ui.graphics.RenderEffect? {
+        if (blurPxKey != blurPx || blurTintKey != tint) {
+            val blur = if (blurPx > 0f) {
+                RenderEffect.createBlurEffect(blurPx, blurPx, Shader.TileMode.CLAMP)
             } else {
                 null
             }
-            blurKey = blurPx
+            val effect = if (tint.alpha > 0f) {
+                val colorFilter = BlendModeColorFilter(tint.toArgb(), BlendMode.SRC_OVER)
+                if (blur != null) {
+                    RenderEffect.createColorFilterEffect(colorFilter, blur)
+                } else {
+                    RenderEffect.createColorFilterEffect(colorFilter)
+                }
+            } else {
+                blur
+            }
+            blurEffect = effect?.asComposeRenderEffect()
+            blurPxKey = blurPx
+            blurTintKey = tint
         }
         return blurEffect
     }
@@ -592,9 +639,9 @@ private fun ImageBitmap.cropPixels(left: Int, top: Int, cropWidth: Int, cropHeig
 }
 
 /**
- * Applies the CPU equivalent of [filter] — stack blur, plus refraction for glass — in place on the
- * receiver. The tint is not baked in here; both the CPU and GPU-blur paths draw it as a rect over the
- * result (and the GPU glass path mixes it in the shader), so there is a single tint path per backend.
+ * Applies the CPU equivalent of [filter] — stack blur, plus refraction for glass, then the tint —
+ * in place on the receiver. The tint is blended into the pixels (SRC_OVER) rather than drawn as a
+ * flat overlay rect, which looked worse over the effect's edges.
  */
 private fun Bitmap.applyBackdropFilter(filter: BackdropFilter, density: Density): Bitmap {
     // The receiver is the freshly cropped, exclusively-owned mutable bitmap from cropPixels, so we
@@ -618,7 +665,14 @@ private fun Bitmap.applyBackdropFilter(filter: BackdropFilter, density: Density)
             )
         }
     }
+    applyTint(filter.tint)
     return this
+}
+
+/** Blends [tint] over the whole bitmap (SRC_OVER); no-op when fully transparent. */
+private fun Bitmap.applyTint(tint: Color) {
+    if (tint.alpha <= 0f) return
+    android.graphics.Canvas(this).drawColor(tint.toArgb())
 }
 
 
