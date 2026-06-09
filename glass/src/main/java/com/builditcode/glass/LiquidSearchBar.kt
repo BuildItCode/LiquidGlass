@@ -64,6 +64,7 @@ fun LiquidSearchBar(
     colors: LiquidComponentColors = LiquidComponentColors(),
     blurRadiusIntensity: Float = 5f,
     borderRotationDegrees: Float = 0f,
+    showBorder: Boolean= true,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() }
 ) {
     var pressed by remember { mutableStateOf(false) }
@@ -106,6 +107,7 @@ fun LiquidSearchBar(
         visuals = visuals,
         enabled = enabled,
         borderRotationDegrees = borderRotationDegrees,
+        showBorder = showBorder,
         gapSize = 0.04f
     ) {
         BasicTextField(

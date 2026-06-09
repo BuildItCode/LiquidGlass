@@ -50,6 +50,7 @@ internal fun LiquidSurface(
     colors: LiquidComponentColors,
     visuals: LiquidInteractionVisuals,
     enabled: Boolean,
+    showBorder: Boolean,
     borderRotationDegrees: Float,
     gapSize: Float = 0.08f,
     softness: Float = 0.06f,
@@ -76,13 +77,17 @@ internal fun LiquidSurface(
     }
 
     Box(
-        modifier = surfaceModifier.glassBorder(
-            shape = liquidShape,
-            borderColor = colors.border.copy(alpha = 0.7f + visuals.pressProgress * 0.24f),
-            borderWidth = 1.dp,
-            gapSize = gapSize,
-            softness = softness,
-            rotationDegrees = borderRotationDegrees
+        modifier = surfaceModifier.then(
+            if(showBorder) {
+                Modifier.glassBorder(
+                    shape = liquidShape,
+                    borderColor = colors.border.copy(alpha = 0.7f + visuals.pressProgress * 0.24f),
+                    borderWidth = 1.dp,
+                    gapSize = gapSize,
+                    softness = softness,
+                    rotationDegrees = borderRotationDegrees
+                )
+            } else Modifier
         ),
         contentAlignment = Alignment.Center
     ) {

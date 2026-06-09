@@ -132,7 +132,7 @@ internal fun ImageBitmap.softwareCopyFromHardware(): ImageBitmap? {
 @Composable
 fun rememberBackdropManager(
     defaultScaleFactor: Float = 0.4f,
-    defaultDebounceMs: Long = 32L
+    defaultDebounceMs: Long = 16L
 ): BackdropLayerManager {
     val scope = rememberCoroutineScope()
     val manager = remember(scope) { BackdropLayerManager(scope, defaultScaleFactor, defaultDebounceMs) }
@@ -153,8 +153,8 @@ fun rememberBackdropManager(
 @Stable
 class BackdropLayerManager(
     private val scope: CoroutineScope,
-    private val defaultScaleFactor: Float = 0.4f,
-    private val defaultDebounceMs: Long = 32L
+    private val defaultScaleFactor: Float,
+    private val defaultDebounceMs: Long
 ) {
     private val states = mutableMapOf<String, BackdropState>()
 
