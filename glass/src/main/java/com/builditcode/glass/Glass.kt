@@ -226,10 +226,11 @@ fun Modifier.layeredBackdropCapture(
     val captureShape = shape ?: filter.shape
     val useGpu = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
     var targetRectInRoot by remember { mutableStateOf(Rect.Zero) }
-    // Read the capture in composition so that a new source publish (e.g. an animating background that
-    // moves while this element stays still) recomposes and redraws this consumer. Movement of the
-    // consumer itself is handled separately by reading targetRectInRoot in draw, so scrolling stays
-    // frame-aligned without depending on the source to republish.
+    // Read the capture in composition: a publish bumps the per-layer state's version, recomposing and
+    // redrawing this consumer. A Modifier.Node that observed/invalidated in draw was tried but a
+    // static consumer over an animating source froze — the source writes the capture during its own
+    // draw phase, which a draw-time consumer can't react to until some other invalidation (a scroll)
+    // kickstarts it. Composition observation is the reliable path. Position is read in draw below.
     val sourceCapture = manager.getLayerCapture(layerName)
 
     val glassShader = remember(useGpu) {
@@ -256,8 +257,6 @@ fun Modifier.layeredBackdropCapture(
             }
             targetRectInRoot = nextRect
         }
-        // Position is read live here (targetRectInRoot) so the backdrop stays frame-aligned while the
-        // consumer scrolls, without needing a source republish.
         .drawWithContent {
             val capture = sourceCapture
             if (capture != null) {

@@ -9,7 +9,7 @@ The system has two sides:
 - **Source** — `Modifier.layeredBackdropSource(name)` captures the pixels behind glass surfaces into a downscaled, double-buffered bitmap and publishes it to a shared `BackdropLayerManager`.
 - **Capture** — `Modifier.layeredBackdropCapture(name, ...)` reads the published capture live in its own draw phase, positions it under its on-screen region, and applies blur or glass.
 
-Both are ordinary `Modifier` chains (built with `composed`). A consumer redraws when the source publishes new pixels — a static source publishes rarely, an animated one each frame — and it re-samples the source at its own live on-screen position every frame as it scrolls, so the backdrop stays frame-aligned with no lag and no manual triggers.
+The capture reads its layer's published capture in composition, so a publish recomposes and redraws the consumer; its on-screen position is read in draw so scrolling stays frame-aligned. A consumer redraws when the source publishes new pixels — a static source publishes rarely, an animated one each frame — and it re-samples at its own live position every frame as it scrolls, with no lag and no manual triggers. (A `Modifier.Node` that observed/invalidated entirely in draw was tried but a static consumer over an animating source froze: the source writes the capture during its own draw phase, which a draw-time consumer can't reliably react to — composition observation is the dependable path.)
 
 Multiple named layers can coexist. A foreground card can sample a `"Background"` layer, and an overlay sheet can sample a `"Foreground"` layer that contains the background plus non-glass foreground UI.
 
