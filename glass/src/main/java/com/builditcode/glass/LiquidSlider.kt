@@ -65,6 +65,7 @@ fun LiquidSlider(
     layerName: String? = null,
     valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
     enabled: Boolean = true,
+    showBorder: Boolean = true,
     steps: Int = 0,
     onValueChangeFinished: (() -> Unit)? = null,
     colors: LiquidComponentColors = LiquidComponentColors(),
@@ -156,6 +157,7 @@ fun LiquidSlider(
             shape = thumbShape,
             colors = colors,
             enabled = enabled,
+            showBorder = showBorder,
             blurRadiusIntensity = blurRadiusIntensity,
             borderRotationDegrees = borderRotationDegrees
         )

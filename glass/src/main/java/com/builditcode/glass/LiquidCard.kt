@@ -54,6 +54,7 @@ fun LiquidCard(
     contentPadding: PaddingValues = PaddingValues(20.dp),
     blurRadiusIntensity: Float = 5f,
     borderRotationDegrees: Float = 0f,
+    showBorder: Boolean = true,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
     content: @Composable BoxScope.() -> Unit
 ) {
@@ -90,6 +91,7 @@ fun LiquidCard(
         colors = colors,
         visuals = visuals,
         enabled = enabled,
+        showBorder = showBorder,
         borderRotationDegrees = borderRotationDegrees
     ) {
         androidx.compose.foundation.layout.Box(

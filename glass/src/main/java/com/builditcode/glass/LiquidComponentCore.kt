@@ -50,6 +50,7 @@ internal fun LiquidSurface(
     colors: LiquidComponentColors,
     visuals: LiquidInteractionVisuals,
     enabled: Boolean,
+    showBorder: Boolean,
     borderRotationDegrees: Float,
     gapSize: Float = 0.08f,
     softness: Float = 0.06f,
@@ -76,14 +77,19 @@ internal fun LiquidSurface(
     }
 
     Box(
-        modifier = surfaceModifier.glassBorder(
-            shape = liquidShape,
-            borderColor = colors.border.copy(alpha = 0.7f + visuals.pressProgress * 0.24f),
-            borderWidth = 1.dp,
-            gapSize = gapSize,
-            softness = softness,
-            rotationDegrees = borderRotationDegrees
-        ),
+        modifier = surfaceModifier
+            .then(
+                if(showBorder) {
+                    Modifier.glassBorder(
+                        shape = liquidShape,
+                        borderColor = colors.border.copy(alpha = 0.7f + visuals.pressProgress * 0.24f),
+                        borderWidth = 1.dp,
+                        gapSize = gapSize,
+                        softness = softness,
+                        rotationDegrees = borderRotationDegrees
+                    )
+                } else Modifier
+            ),
         contentAlignment = Alignment.Center
     ) {
         val surfaceFill = Modifier
@@ -122,6 +128,7 @@ internal fun LiquidGlassHandle(
     colors: LiquidComponentColors,
     enabled: Boolean,
     borderRotationDegrees: Float,
+    showBorder: Boolean,
     blurRadiusIntensity: Float = 4f
 ) {
     val filter = remember(shape, colors.tint, blurRadiusIntensity) {
@@ -146,13 +153,18 @@ internal fun LiquidGlassHandle(
     }
 
     Box(
-        modifier = handleModifier.glassBorder(
-            shape = shape,
-            borderColor = colors.border.copy(alpha = 0.72f),
-            borderWidth = 1.dp,
-            gapSize = 0.04f,
-            softness = 0.04f,
-            rotationDegrees = borderRotationDegrees
+        modifier = handleModifier.then(
+            if(showBorder) {
+                Modifier
+                    .glassBorder(
+                        shape = shape,
+                        borderColor = colors.border.copy(alpha = 0.72f),
+                        borderWidth = 1.dp,
+                        gapSize = 0.04f,
+                        softness = 0.04f,
+                        rotationDegrees = borderRotationDegrees
+                    )
+            } else Modifier
         )
     ) {
         val handleFill = Modifier

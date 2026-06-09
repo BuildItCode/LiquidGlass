@@ -60,6 +60,7 @@ fun LiquidSearchBar(
     layerName: String? = null,
     placeholder: String = "Search",
     enabled: Boolean = true,
+    showBorder: Boolean = true,
     shape: Shape = RoundedCornerShape(24.dp),
     colors: LiquidComponentColors = LiquidComponentColors(),
     blurRadiusIntensity: Float = 5f,
@@ -106,6 +107,7 @@ fun LiquidSearchBar(
         visuals = visuals,
         enabled = enabled,
         borderRotationDegrees = borderRotationDegrees,
+        showBorder = showBorder,
         gapSize = 0.04f
     ) {
         BasicTextField(

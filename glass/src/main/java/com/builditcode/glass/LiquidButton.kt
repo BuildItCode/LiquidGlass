@@ -54,6 +54,7 @@ fun LiquidButton(
     colors: LiquidComponentColors = LiquidComponentColors(),
     blurRadiusIntensity: Float = 4f,
     borderRotationDegrees: Float = 0f,
+    showBorder: Boolean = true,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() }
 ) {
     LiquidButton(
@@ -65,7 +66,8 @@ fun LiquidButton(
         colors = colors,
         blurRadiusIntensity = blurRadiusIntensity,
         borderRotationDegrees = borderRotationDegrees,
-        interactionSource = interactionSource
+        interactionSource = interactionSource,
+        showBorder = showBorder
     ) {
         Text(
             text = text,
@@ -121,6 +123,7 @@ fun LiquidButton(
     colors: LiquidComponentColors = LiquidComponentColors(),
     blurRadiusIntensity: Float = 4f,
     borderRotationDegrees: Float = 0f,
+    showBorder: Boolean = true,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
     content: @Composable RowScope.() -> Unit
 ) {
@@ -157,6 +160,7 @@ fun LiquidButton(
         colors = colors,
         visuals = visuals,
         enabled = enabled,
+        showBorder = showBorder,
         borderRotationDegrees = borderRotationDegrees
     ) {
         Row(

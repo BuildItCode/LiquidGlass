@@ -48,6 +48,7 @@ fun LiquidToggle(
     modifier: Modifier = Modifier,
     layerName: String? = null,
     enabled: Boolean = true,
+    showBorder: Boolean = true,
     colors: LiquidComponentColors = LiquidComponentColors(),
     blurRadiusIntensity: Float = 4f,
     borderRotationDegrees: Float = 0f,
@@ -116,6 +117,7 @@ fun LiquidToggle(
             colors = colors,
             enabled = enabled,
             borderRotationDegrees = borderRotationDegrees,
+            showBorder = showBorder,
             blurRadiusIntensity = blurRadiusIntensity,
         )
     }
