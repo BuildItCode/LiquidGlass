@@ -303,17 +303,20 @@ fun Modifier.captureToBitmapCached(
         ImageBitmap(width = bitmapWidth, height = bitmapHeight),
         ImageBitmap(width = bitmapWidth, height = bitmapHeight)
     )
+    // Canvas objects are bound to their bitmap once and reused, so the per-frame capture allocates
+    // nothing here.
+    val canvases = Array(buffers.size) { Canvas(buffers[it]) }
     var next = 0
 
     onDrawWithContent {
         drawContent()
 
         if (captureEnabled) {
-            val bitmap = buffers[next]
+            val index = next
             next = (next + 1) % buffers.size
+            val bitmap = buffers[index]
             bitmap.asAndroidBitmap().eraseColor(android.graphics.Color.TRANSPARENT)
-            val canvas = Canvas(bitmap)
-            draw(this, layoutDirection, canvas, size) {
+            draw(this, layoutDirection, canvases[index], size) {
                 scale(captureScale, captureScale, pivot = Offset.Zero) {
                     this@onDrawWithContent.drawContent()
                 }
@@ -360,9 +363,10 @@ private fun ContentDrawScope.drawGpuBackdrop(
         is BackdropFilter.Glass -> effectCache.glass(
             width = size.width,
             height = size.height,
-            density = density,
+            density = this,
             glass = f,
-            radii = shape.resolveCornerRadiiPx(size, layoutDirection, this),
+            shape = shape,
+            layoutDirection = layoutDirection,
             shader = shader
         )
     }
@@ -391,33 +395,42 @@ private class GlassEffectCache {
 
     private var width = -1f
     private var height = -1f
-    private var density = -1f
+    private var densityValue = -1f
     private var glass: BackdropFilter.Glass? = null
-    private val radii = FloatArray(4) { Float.NaN }
+    private var shape: Shape? = null
+    private var layoutDirection: LayoutDirection? = null
     private var glassEffect: androidx.compose.ui.graphics.RenderEffect? = null
 
-    /** Returns the cached glass effect, rebuilding only when size, density, filter or [radii] change. */
+    /**
+     * Returns the cached glass effect, rebuilding only when the size, density, filter, [shape] or
+     * layout direction change. Corner radii are resolved here (not every draw), so the steady-state
+     * call is allocation-free — it neither builds a `RenderEffect` nor an `Outline`.
+     */
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     fun glass(
         width: Float,
         height: Float,
-        density: Float,
+        density: Density,
         glass: BackdropFilter.Glass,
-        radii: FloatArray,
+        shape: Shape?,
+        layoutDirection: LayoutDirection,
         shader: RuntimeShader
     ): androidx.compose.ui.graphics.RenderEffect {
         val cached = glassEffect
         if (cached != null && this.width == width && this.height == height &&
-            this.density == density && this.glass == glass && this.radii.contentEquals(radii)
+            this.densityValue == density.density && this.glass == glass &&
+            this.shape == shape && this.layoutDirection == layoutDirection
         ) {
             return cached
         }
-        val effect = glassRenderEffect(glass, shader, width, height, density, radii)
+        val radii = shape.resolveCornerRadiiPx(Size(width, height), layoutDirection, density)
+        val effect = glassRenderEffect(glass, shader, width, height, density.density, radii)
         this.width = width
         this.height = height
-        this.density = density
+        this.densityValue = density.density
         this.glass = glass
-        radii.copyInto(this.radii)
+        this.shape = shape
+        this.layoutDirection = layoutDirection
         glassEffect = effect
         return effect
     }
@@ -670,9 +683,9 @@ sealed interface BackdropFilter {
     @Stable
     data class Glass(
         val blurRadiusIntensity: Float = 4f,
-        val refraction: Float = 0.25f,
-        val dispersion: Float = 0.23f,
-        val edge: Float = 0.35f,
+        val refraction: Float = 0.2f,
+        val dispersion: Float = 0.2f,
+        val edge: Float = 0.25f,
         val tint: Color = Color.Transparent,
         override val shape: Shape? = null
     ) : BackdropFilter
