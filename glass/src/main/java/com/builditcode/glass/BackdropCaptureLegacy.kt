@@ -11,11 +11,22 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
+/**
+ * Legacy (< API 33) backend: Picture/bitmap capture with CPU blur.
+ *
+ * Region fallbacks are crops of a master that was already stack-blurred per distinct
+ * region radius on [Dispatchers.Default], so steady-state draws are plain bitmap blits
+ * with no main-thread blur. The only draw-time CPU work is the transitional case where
+ * a region's radius changed after the last capture: an unblurred fallback gets a one-off
+ * draw-time blur, and a pre-blurred fallback with a stale radius keeps its previous blur
+ * level until the requested recapture lands. Hardware snapshot readback and the
+ * software-config copy both run off the main thread.
+ */
 internal object BackdropCaptureLegacy : BackdropCaptureBackend {
     override val createsFallbackBitmap: Boolean = true
-    override val retainsHardwareCaptureLayer: Boolean = false
 
     override fun usesHardwareLayerForSource(state: BackdropState): Boolean =
         state.shouldUseHardwareSnapshot
@@ -28,28 +39,45 @@ internal object BackdropCaptureLegacy : BackdropCaptureBackend {
         captureSize: IntSize
     ) {
         val session = state.beginHardwareCapture(captureSize)
+        val blurRadii = state.pendingCpuBlurRadii()
         state.setHardwareProcessingJob(
             state.captureScope.launch(Dispatchers.Main) {
-                var snapshot: ImageBitmap? = null
+                var master: ImageBitmap? = null
+                var blurredMasters: Map<Int, ImageBitmap> = emptyMap()
+                var applied = false
                 try {
-                    snapshot = layer.toImageBitmap()
-                    snapshot?.softwareCopyFromHardware()?.let { softwareSnapshot ->
-                        snapshot?.safeRecycle()
-                        snapshot = softwareSnapshot
+                    val snapshot = layer.toImageBitmap()
+                    master = snapshot
+                    val prepared = withContext(Dispatchers.Default) {
+                        val software = snapshot.softwareCopyFromHardware()
+                        val masterBitmap = if (software != null) {
+                            snapshot.safeRecycle()
+                            software
+                        } else {
+                            snapshot
+                        }
+                        masterBitmap to createBlurredMasters(masterBitmap.asAndroidBitmap(), blurRadii)
                     }
-                    val captured = snapshot ?: return@launch
+                    master = prepared.first
+                    blurredMasters = prepared.second
                     if (!isActive) {
-                        captured.safeRecycle()
-                        snapshot = null
+                        master?.safeRecycle()
+                        blurredMasters.values.forEach { it.safeRecycle() }
                         return@launch
                     }
-                    state.applyHardwareImageCapture(captured, session)
-                    snapshot = null
+                    state.applyHardwareImageCapture(prepared.first, prepared.second, session)
+                    applied = true
                 } catch (e: CancellationException) {
-                    snapshot?.safeRecycle()
+                    if (!applied) {
+                        master?.safeRecycle()
+                        blurredMasters.values.forEach { it.safeRecycle() }
+                    }
                     throw e
                 } catch (e: Exception) {
-                    snapshot?.safeRecycle()
+                    if (!applied) {
+                        master?.safeRecycle()
+                        blurredMasters.values.forEach { it.safeRecycle() }
+                    }
                     state.onHardwareCaptureFailed(e, session)
                 }
             }
@@ -62,13 +90,12 @@ internal object BackdropCaptureLegacy : BackdropCaptureBackend {
         result: BackdropState.CaptureResult?,
         layer: GraphicsLayer?,
         density: Float,
-        cpuBlurCache: CpuBlurCache
+        drawCache: CaptureDrawCache
     ) {
-        layer?.renderEffect = null
         val bitmap = result?.fallbackBitmap
         when (filter) {
-            is BackdropFilter.Blur -> drawBlur(filter, result, bitmap, density, cpuBlurCache)
-            is BackdropFilter.Glass -> drawGlass(filter, result, bitmap, density, cpuBlurCache)
+            is BackdropFilter.Blur -> drawBlur(filter, result, bitmap, density, drawCache.cpuBlur)
+            is BackdropFilter.Glass -> drawGlass(filter, result, bitmap, density, drawCache.cpuBlur)
         }
     }
 
@@ -77,17 +104,19 @@ internal object BackdropCaptureLegacy : BackdropCaptureBackend {
         result: BackdropState.CaptureResult?,
         bitmap: ImageBitmap?,
         density: Float,
-        cpuBlurCache: CpuBlurCache
+        cpuBlur: CpuBlurCache
     ) {
-        val blurPx = glass.blurRadiusIntensity * 2f * density
         if (bitmap != null) {
+            val wantedRadiusPx = (glass.blurRadiusIntensity * 2f * density).roundToInt()
+            val preBlurredRadiusPx = result?.fallbackBlurRadiusPx ?: 0
+            val residualRadiusPx = if (preBlurredRadiusPx == 0) wantedRadiusPx else 0
             val targetSize = result?.drawSize ?: IntSize(
                 size.width.roundToInt().coerceAtLeast(1),
                 size.height.roundToInt().coerceAtLeast(1)
             )
-            val glassBitmap = cpuBlurCache.glassRefraction(
+            val glassBitmap = cpuBlur.glassRefraction(
                 sourceBitmap = bitmap.asAndroidBitmap(),
-                radiusPx = blurPx.roundToInt(),
+                radiusPx = residualRadiusPx,
                 glass = glass,
                 targetSize = targetSize
             )
@@ -101,12 +130,17 @@ internal object BackdropCaptureLegacy : BackdropCaptureBackend {
         result: BackdropState.CaptureResult?,
         bitmap: ImageBitmap?,
         density: Float,
-        cpuBlurCache: CpuBlurCache
+        cpuBlur: CpuBlurCache
     ) {
-        val blurPx = blur.blurRadiusIntensity * 2f * density
-        if (bitmap != null && blurPx > 0f) {
-            val blurred = cpuBlurCache.blur(bitmap.asAndroidBitmap(), blurPx.roundToInt())
-            drawBitmapInCaptureRegion(blurred.asImageBitmap(), result)
+        if (bitmap != null) {
+            val wantedRadiusPx = (blur.blurRadiusIntensity * 2f * density).roundToInt()
+            val preBlurredRadiusPx = result?.fallbackBlurRadiusPx ?: 0
+            val toDraw = if (wantedRadiusPx > 0 && preBlurredRadiusPx == 0) {
+                cpuBlur.blur(bitmap.asAndroidBitmap(), wantedRadiusPx).asImageBitmap()
+            } else {
+                bitmap
+            }
+            drawBitmapInCaptureRegion(toDraw, result)
         }
         drawRect(blur.tint)
     }
