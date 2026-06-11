@@ -27,6 +27,9 @@
  *   master, so no CPU blur runs on the main thread during steady-state draws. If a
  *   filter's blur radius changes, a recapture is requested and the previous blur level
  *   is shown until it lands.
+ * - Because legacy masters are snapshots (unlike API 33+ layer masters, which reference
+ *   the live RenderNode tree), [BackdropState] keeps a debounce-cadence recapture loop
+ *   alive while regions exist so backgrounds moving behind static glass stay current.
  */
 package com.builditcode.glass
 
@@ -281,6 +284,15 @@ internal val backdropCaptureBackend: BackdropCaptureBackend =
 
 internal interface BackdropCaptureBackend {
     val createsFallbackBitmap: Boolean
+
+    /**
+     * True when masters are rasterized snapshots that go stale as source content changes
+     * (legacy). [BackdropState] then keeps a debounce-cadence recapture loop alive while
+     * regions exist, since content animating inside its own child layer never
+     * re-invalidates the source's draw. False when masters are live [GraphicsLayer]s
+     * that reflect content changes without recapturing (API 33+).
+     */
+    val requiresContinuousCapture: Boolean
 
     fun usesHardwareLayerForSource(state: BackdropState): Boolean
 
@@ -1300,7 +1312,7 @@ class BackdropState internal constructor(
                         requestCapture()
                     } else {
                         Log.w("BackdropState", "Processing failed (${scaledW}x${scaledH})", e)
-                        if (captureRequested) invalidateOrSchedule()
+                        scheduleFollowUpCapture()
                     }
                 }
             }
@@ -1409,7 +1421,7 @@ class BackdropState internal constructor(
         oldBlurred.values.forEach { it.safeRecycle() }
         processingJob = null
 
-        if (captureRequested) invalidateOrSchedule()
+        scheduleFollowUpCapture()
     }
 
     private fun applyMasterLayer(
@@ -1437,7 +1449,7 @@ class BackdropState internal constructor(
         oldBlurred.values.forEach { it.safeRecycle() }
         processingJob = null
 
-        if (captureRequested) invalidateOrSchedule()
+        scheduleFollowUpCapture()
     }
 
     private fun beginCapture() {
@@ -1474,6 +1486,30 @@ class BackdropState internal constructor(
                 if (remaining > 0) delay(remaining)
                 sourceInvalidator++
             }
+        }
+    }
+
+    /**
+     * Continues capturing after a capture completes. Explicit requests always win; on
+     * snapshot backends ([BackdropCaptureBackend.requiresContinuousCapture]) the next
+     * capture is additionally scheduled at debounce cadence while regions exist, so a
+     * moving background keeps refreshing a static glass component. The loop is
+     * self-limiting: it only reschedules from capture completion, and captures only
+     * happen during draws, so it idles when no frames are produced and stops while
+     * updates are frozen or no regions remain.
+     */
+    private fun scheduleFollowUpCapture() {
+        if (captureRequested) {
+            invalidateOrSchedule()
+            return
+        }
+        if (!backdropCaptureBackend.requiresContinuousCapture) return
+        if (regions.isEmpty() || !isUpdateEnabled()) return
+        if (scheduledJob?.isActive == true) return
+        scheduledJob = scope.launch {
+            val remaining = (debounceMs - (SystemClock.uptimeMillis() - lastCaptureTime)).coerceAtLeast(1L)
+            delay(remaining)
+            if (regions.isNotEmpty() && isUpdateEnabled()) sourceInvalidator++
         }
     }
 

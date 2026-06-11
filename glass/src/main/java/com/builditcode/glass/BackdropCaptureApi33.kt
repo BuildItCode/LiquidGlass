@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.toIntSize
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
 internal object BackdropCaptureApi33 : BackdropCaptureBackend {
     override val createsFallbackBitmap: Boolean = false
+    override val requiresContinuousCapture: Boolean = false
 
     override fun usesHardwareLayerForSource(state: BackdropState): Boolean = true
 
