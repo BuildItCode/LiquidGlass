@@ -100,7 +100,8 @@ The capture panel can be captured by a later source layer for blur-over-blur eff
 @Composable
 fun rememberBackdropManager(
     defaultScaleFactor: Float = 0.4f,
-    defaultDebounceMs: Long   = 32L
+    defaultDebounceMs: Long   = 16L,
+    disableHardwareAcceleration: Boolean = false
 ): BackdropLayerManager
 ```
 
@@ -108,6 +109,7 @@ fun rememberBackdropManager(
 |-----------|-------------|
 | `defaultScaleFactor` | Resolution scale for internal bitmaps. `0.4` = 40% of screen size. Lower = faster, blurrier captures. |
 | `defaultDebounceMs` | Minimum delay between full re-captures. `16` = every frame at 60fps. `32` = every other frame. |
+| `disableHardwareAcceleration` | Forces software picture/bitmap source capture and disables legacy hardware snapshot promotion. |
 
 ---
 
@@ -437,6 +439,7 @@ While `shouldUpdate` is `false`, source nodes skip snapshot recording. Capture n
 - **Debounce**: `32ms` is the manager default (~30 fps). Drop to `16ms` for 60 fps recapture if the background animates continuously, or raise it if the background changes rarely.
 - **API 33+ capture**: Sources are recorded into retained GPU `GraphicsLayer`s, then filtered with platform blur and AGSL. This avoids CPU bitmap copies for hardware-backed images and videos.
 - **API 24-32 fallback**: Software-renderable layers use the lower-overhead `Picture` bitmap path with bitmap reuse. If the source contains hardware-backed content, the layer promotes to a hardware snapshot and then uses the same legacy bitmap effect path.
+- **Hardware acceleration opt-out**: Pass `disableHardwareAcceleration = true` to `rememberBackdropManager`, `TriLevelLayout`, `QuadLevelLayout`, or `rememberLiquidScaffoldState` to keep source capture on the software path. Hardware-backed source content may be unavailable when this is disabled.
 - **Legacy effects**: `BackdropFilter.Blur` and `BackdropFilter.Glass` both use CPU processing on API 24-32. Legacy Glass keeps blur, refraction, edge distortion, and tint, but dispersion is AGSL-only.
 - **Source scope**: Keep the source subtree scoped to the pixels that glass panels actually need. Capturing an entire launcher page at high scale during continuous animation is still real work, even on API 33+.
 - **Shader compilation**: `BackdropFilter.Glass` compiles its AGSL shader lazily on first draw and caches it on the filter instance. Prefer stable remembered filter instances when parameters are not changing.

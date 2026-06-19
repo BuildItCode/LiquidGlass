@@ -31,7 +31,8 @@ internal object BackdropCaptureApi33 : BackdropCaptureBackend {
     override val createsFallbackBitmap: Boolean = false
     override val requiresContinuousCapture: Boolean = false
 
-    override fun usesHardwareLayerForSource(state: BackdropState): Boolean = true
+    override fun usesHardwareLayerForSource(state: BackdropState): Boolean =
+        !state.isHardwareAccelerationDisabled
 
     override fun configureCaptureLayer(layer: GraphicsLayer) {
         layer.compositingStrategy = CompositingStrategy.Offscreen

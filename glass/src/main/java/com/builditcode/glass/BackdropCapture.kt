@@ -178,14 +178,24 @@ internal fun createBlurredMasters(master: Bitmap, radii: Set<Int>): Map<Int, Ima
  * @param defaultScaleFactor Internal capture resolution scale used by new layer states.
  * Lower values reduce capture/blur cost at the expense of detail.
  * @param defaultDebounceMs Minimum interval between source recaptures for new layer states.
+ * @param disableHardwareAcceleration When true, source capture stays on the software
+ * picture/bitmap path and legacy hardware snapshot promotion is disabled.
  */
 @Composable
 fun rememberBackdropManager(
     defaultScaleFactor: Float = 0.4f,
-    defaultDebounceMs: Long = 16L
+    defaultDebounceMs: Long = 16L,
+    disableHardwareAcceleration: Boolean = false
 ): BackdropLayerManager {
     val scope = rememberCoroutineScope()
-    val manager = remember(scope) { BackdropLayerManager(scope, defaultScaleFactor, defaultDebounceMs) }
+    val manager = remember(scope, defaultScaleFactor, defaultDebounceMs, disableHardwareAcceleration) {
+        BackdropLayerManager(
+            scope = scope,
+            defaultScaleFactor = defaultScaleFactor,
+            defaultDebounceMs = defaultDebounceMs,
+            disableHardwareAcceleration = disableHardwareAcceleration
+        )
+    }
     DisposableEffect(manager) { onDispose { manager.disposeAll() } }
     return manager
 }
@@ -204,7 +214,8 @@ fun rememberBackdropManager(
 class BackdropLayerManager(
     private val scope: CoroutineScope,
     private val defaultScaleFactor: Float,
-    private val defaultDebounceMs: Long
+    private val defaultDebounceMs: Long,
+    private val disableHardwareAcceleration: Boolean = false
 ) {
     private val states = mutableMapOf<String, BackdropState>()
 
@@ -239,7 +250,13 @@ class BackdropLayerManager(
      */
     fun getState(layerName: String): BackdropState =
         states.getOrPut(layerName) {
-            BackdropState(scope, defaultScaleFactor, defaultDebounceMs) { shouldUpdate }
+            BackdropState(
+                scope = scope,
+                scaleFactor = defaultScaleFactor,
+                debounceMs = defaultDebounceMs,
+                disableHardwareAcceleration = disableHardwareAcceleration,
+                isUpdateEnabled = { shouldUpdate }
+            )
         }
 
     /**
@@ -1046,6 +1063,7 @@ class BackdropState internal constructor(
     private val scope: CoroutineScope,
     private val scaleFactor: Float,
     private val debounceMs: Long,
+    private val disableHardwareAcceleration: Boolean = false,
     private val isUpdateEnabled: () -> Boolean = { true },
 ) {
     data class CaptureResult(
@@ -1115,6 +1133,9 @@ class BackdropState internal constructor(
 
     internal val shouldUseHardwareSnapshot: Boolean
         get() = useHardwareSnapshot
+
+    internal val isHardwareAccelerationDisabled: Boolean
+        get() = disableHardwareAcceleration
 
     internal val captureScaleFactor: Float
         get() = scaleFactor
@@ -1306,10 +1327,17 @@ class BackdropState internal constructor(
                 newBlurredMasters.values.forEach { it.safeRecycle() }
                 withContext(Dispatchers.Main) {
                     processingJob = null
-                    if (isHardwareBitmapSoftwareFailure(e)) {
+                    if (isHardwareBitmapSoftwareFailure(e) && !disableHardwareAcceleration) {
                         useHardwareSnapshot = true
                         lastCaptureTime = 0L
                         requestCapture()
+                    } else if (isHardwareBitmapSoftwareFailure(e)) {
+                        Log.w(
+                            "BackdropState",
+                            "Software capture failed because the source requires hardware rendering, " +
+                                    "but hardware acceleration is disabled.",
+                            e
+                        )
                     } else {
                         Log.w("BackdropState", "Processing failed (${scaledW}x${scaledH})", e)
                         scheduleFollowUpCapture()
@@ -1491,9 +1519,10 @@ class BackdropState internal constructor(
 
     /**
      * Continues capturing after a capture completes. Explicit requests always win; on
-     * snapshot backends ([BackdropCaptureBackend.requiresContinuousCapture]) the next
-     * capture is additionally scheduled at debounce cadence while regions exist, so a
-     * moving background keeps refreshing a static glass component. The loop is
+     * snapshot backends ([BackdropCaptureBackend.requiresContinuousCapture]) or
+     * software-only capture, the next capture is additionally scheduled at debounce
+     * cadence while regions exist, so a moving background keeps refreshing a static
+     * glass component. The loop is
      * self-limiting: it only reschedules from capture completion, and captures only
      * happen during draws, so it idles when no frames are produced and stops while
      * updates are frozen or no regions remain.
@@ -1503,7 +1532,7 @@ class BackdropState internal constructor(
             invalidateOrSchedule()
             return
         }
-        if (!backdropCaptureBackend.requiresContinuousCapture) return
+        if (!backdropCaptureBackend.requiresContinuousCapture && !disableHardwareAcceleration) return
         if (regions.isEmpty() || !isUpdateEnabled()) return
         if (scheduledJob?.isActive == true) return
         scheduledJob = scope.launch {

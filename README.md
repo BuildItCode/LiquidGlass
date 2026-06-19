@@ -129,6 +129,7 @@ The `:app` module in this repo is a verification app for the capture paths: init
 - **Kotlin:** 2.2+
 - **Best experience:** API 33+ for GPU layer capture, platform blur, and full AGSL glass. API 24-32 uses the legacy bitmap fallback with CPU blur/refraction.
 - **Hardware content:** Compose-rendered hardware bitmaps are supported automatically. API 33+ keeps the capture on the GPU; API 24-32 falls back to a hardware snapshot when software capture cannot render the source.
+- **Software-only capture:** Pass `disableHardwareAcceleration = true` to `rememberBackdropManager`, `TriLevelLayout`, `QuadLevelLayout`, or `rememberLiquidScaffoldState` to opt out of hardware source capture.
 
 ---
 

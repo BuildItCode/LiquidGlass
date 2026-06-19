@@ -47,6 +47,9 @@ object QuadLevelLayers {
  *
  * @param scaleFactor Internal resolution scale for backdrop rasterization (e.g. 0.5 = 50%).
  * @param debounceMs Minimum interval between full re-captures in milliseconds.
+ * @param disableHardwareAcceleration When true, source capture uses the software
+ * picture/bitmap path and hardware snapshot promotion is disabled. Ignored when
+ * [manager] is supplied.
  * @param background Bottommost layer, captured under [TrilevelLayers.Background].
  * @param foreground Middle layer rendered above background, captured under [TrilevelLayers.Foreground].
  * @param overlay Topmost layer — not a capture source; use [layeredBackdropCapture] here
@@ -57,12 +60,17 @@ fun TriLevelLayout(
     modifier: Modifier = Modifier,
     scaleFactor: Float = 0.6f,
     debounceMs: Long = 32L,
+    disableHardwareAcceleration: Boolean = false,
     manager: BackdropLayerManager? = null,
     background: @Composable () -> Unit,
     foreground: @Composable () -> Unit,
     overlay: @Composable () -> Unit
 ) {
-    val manager = manager ?: rememberBackdropManager(scaleFactor, defaultDebounceMs = debounceMs)
+    val manager = manager ?: rememberBackdropManager(
+        defaultScaleFactor = scaleFactor,
+        defaultDebounceMs = debounceMs,
+        disableHardwareAcceleration = disableHardwareAcceleration
+    )
 
     CompositionLocalProvider(
         LocalBackdropLayerManager provides manager
@@ -102,6 +110,9 @@ fun TriLevelLayout(
  *
  * @param scaleFactor Internal resolution scale for backdrop rasterization (e.g. 0.5 = 50%).
  * @param debounceMs Minimum interval between full re-captures in milliseconds.
+ * @param disableHardwareAcceleration When true, source capture uses the software
+ * picture/bitmap path and hardware snapshot promotion is disabled. Ignored when
+ * [manager] is supplied.
  * @param background Bottommost layer, captured under [QuadLevelLayers.Background].
  * @param midground Layer rendered above background, captured under [QuadLevelLayers.Midground].
  * @param foreground Layer rendered above midground, captured under [QuadLevelLayers.Foreground].
@@ -113,13 +124,18 @@ fun QuadLevelLayout(
     modifier: Modifier = Modifier,
     scaleFactor: Float = 0.6f,
     debounceMs: Long = 32L,
+    disableHardwareAcceleration: Boolean = false,
     manager: BackdropLayerManager? = null,
     background: @Composable () -> Unit,
     midground: @Composable () -> Unit,
     foreground: @Composable () -> Unit,
     overlay: @Composable () -> Unit
 ) {
-    val manager = manager ?: rememberBackdropManager(scaleFactor, defaultDebounceMs = debounceMs)
+    val manager = manager ?: rememberBackdropManager(
+        defaultScaleFactor = scaleFactor,
+        defaultDebounceMs = debounceMs,
+        disableHardwareAcceleration = disableHardwareAcceleration
+    )
 
     CompositionLocalProvider(
         LocalBackdropLayerManager provides manager

@@ -30,7 +30,7 @@ internal object BackdropCaptureLegacy : BackdropCaptureBackend {
     override val requiresContinuousCapture: Boolean = true
 
     override fun usesHardwareLayerForSource(state: BackdropState): Boolean =
-        state.shouldUseHardwareSnapshot
+        state.shouldUseHardwareSnapshot && !state.isHardwareAccelerationDisabled
 
     override fun configureCaptureLayer(layer: GraphicsLayer) = Unit
 

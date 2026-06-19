@@ -24,6 +24,7 @@ internal val GLASS_SHADER = """
 
     const float AA = 1.5;
     const float REFRACTION_FALLOFF = 1;
+    const float GLOBAL_REFRACTION = 0.3;
 
     float cornerRadiusFor(float2 p, float4 radii) {
         if (p.y < 0.0) {
@@ -56,10 +57,16 @@ internal val GLASS_SHADER = """
         float2 sc = fc;
 
         if (refraction > 0.0) {
+            // Edge-concentrated refraction: strongest at the rim, easing off inward.
             float depth = clamp(-dist / (min_ext * refraction * REFRACTION_FALLOFF), 0.0, 1.0);
             float sf = 1.0 - depth;
-            float bend = sf * sf;
-            sc = fc - bend * refraction * min_ext * n;
+            float edgeBend = sf * sf;
+
+            // Global refraction so the whole interior distorts too, ramping up
+            // toward the edges. Radial direction keeps it seamless through the center.
+            float2 normPos = lp / half_ext;
+
+            sc = fc - (edgeBend * n + GLOBAL_REFRACTION * normPos) * refraction * min_ext;
         }
 
         half4 col;
