@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.toIntSize
 
+
 /**
  * API 33+ backend: live GPU capture via [GraphicsLayer] with RenderEffect-based
  * blur/glass.

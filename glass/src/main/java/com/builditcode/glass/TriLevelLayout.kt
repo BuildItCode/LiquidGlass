@@ -1,8 +1,10 @@
 package com.builditcode.glass
 
+import android.annotation.SuppressLint
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 
 /**
@@ -47,7 +49,7 @@ object QuadLevelLayers {
  *
  * @param scaleFactor Internal resolution scale for backdrop rasterization (e.g. 0.5 = 50%).
  * @param debounceMs Minimum interval between full re-captures in milliseconds.
- * @param disableHardwareAcceleration When true, source capture uses the software
+ * @param enableHardwareCapture When FALSE, source capture uses the software
  * picture/bitmap path and hardware snapshot promotion is disabled. Ignored when
  * [manager] is supplied.
  * @param background Bottommost layer, captured under [TrilevelLayers.Background].
@@ -57,40 +59,53 @@ object QuadLevelLayers {
  */
 @Composable
 fun TriLevelLayout(
+    background: @Composable () -> Unit,
     modifier: Modifier = Modifier,
+    foreground: (@Composable () -> Unit)? = null,
+    overlay: (@Composable () -> Unit)? = null,
     scaleFactor: Float = 0.6f,
     debounceMs: Long = 32L,
-    disableHardwareAcceleration: Boolean = false,
     manager: BackdropLayerManager? = null,
-    background: @Composable () -> Unit,
-    foreground: @Composable () -> Unit,
-    overlay: @Composable () -> Unit
+    enableHardwareCapture: Boolean = true,
+    shouldCapture: Boolean = true
 ) {
-    val manager = manager ?: rememberBackdropManager(
-        defaultScaleFactor = scaleFactor,
-        defaultDebounceMs = debounceMs,
-        disableHardwareAcceleration = disableHardwareAcceleration
-    )
+    val manager = if(!shouldCapture) null else manager ?: rememberBackdropManager(scaleFactor, defaultDebounceMs = debounceMs, disableHardwareAcceleration = !enableHardwareCapture)
+
+    // Only stand a level up as a capture source if some level above it can actually sample it.
+    val captureForeground = overlay != null
+    val captureBackground = foreground != null || captureForeground
 
     CompositionLocalProvider(
         LocalBackdropLayerManager provides manager
     ) {
         LayeredLayout(modifier = modifier) {
             layer(tag = TrilevelLayers.Background) { _ ->
-                Box(Modifier.layeredBackdropSource(TrilevelLayers.Background)) {
-                    background()
+                CompositionLocalProvider(LocalBackdropLayerName provides null) {
+                    Box(
+                        if (captureBackground) Modifier.layeredBackdropSource(TrilevelLayers.Background)
+                        else Modifier
+                    ) {
+                        background()
+                    }
                 }
             }
             layer(tag = TrilevelLayers.Foreground) { previousLayers ->
-                Box(Modifier.layeredBackdropSource(TrilevelLayers.Foreground)) {
-                    previousLayers()
-                    foreground()
+                CompositionLocalProvider(LocalBackdropLayerName provides TrilevelLayers.Background) {
+                    Box(
+                        if (captureForeground) Modifier.layeredBackdropSource(TrilevelLayers.Foreground)
+                        else Modifier
+                    ) {
+                        previousLayers()
+                        foreground?.invoke()
+                    }
                 }
             }
             layer(tag = TrilevelLayers.Overlay) { previousLayers ->
-                Box {
-                    previousLayers()
-                    overlay()
+                CompositionLocalProvider(LocalBackdropLayerName provides TrilevelLayers.Foreground) {
+                    Box {
+                        previousLayers()
+                        overlay?.invoke()
+                    }
                 }
             }
         }
@@ -110,7 +125,7 @@ fun TriLevelLayout(
  *
  * @param scaleFactor Internal resolution scale for backdrop rasterization (e.g. 0.5 = 50%).
  * @param debounceMs Minimum interval between full re-captures in milliseconds.
- * @param disableHardwareAcceleration When true, source capture uses the software
+ * @param enableHardwareCapture When FALSE, source capture uses the software
  * picture/bitmap path and hardware snapshot promotion is disabled. Ignored when
  * [manager] is supplied.
  * @param background Bottommost layer, captured under [QuadLevelLayers.Background].
@@ -121,49 +136,72 @@ fun TriLevelLayout(
  */
 @Composable
 fun QuadLevelLayout(
+    background: @Composable () -> Unit,
     modifier: Modifier = Modifier,
+    midground: (@Composable () -> Unit)? = null,
+    foreground: (@Composable () -> Unit)? = null,
+    overlay: (@Composable () -> Unit)? = null,
     scaleFactor: Float = 0.6f,
     debounceMs: Long = 32L,
-    disableHardwareAcceleration: Boolean = false,
     manager: BackdropLayerManager? = null,
-    background: @Composable () -> Unit,
-    midground: @Composable () -> Unit,
-    foreground: @Composable () -> Unit,
-    overlay: @Composable () -> Unit
+    shouldCapture: Boolean = true,
+    enableHardwareCapture: Boolean = false
 ) {
-    val manager = manager ?: rememberBackdropManager(
-        defaultScaleFactor = scaleFactor,
-        defaultDebounceMs = debounceMs,
-        disableHardwareAcceleration = disableHardwareAcceleration
-    )
+    val manager = if(!shouldCapture) null else manager ?: rememberBackdropManager(scaleFactor, defaultDebounceMs = debounceMs, disableHardwareAcceleration = !enableHardwareCapture)
+
+    // Only stand a level up as a capture source if some level above it can actually sample it.
+    // When every level above is empty there is no consumer, so skip layeredBackdropSource and
+    // never capture that backdrop.
+    val captureForeground = overlay != null
+    val captureMidground = foreground != null || captureForeground
+    val captureBackground = midground != null || captureMidground
 
     CompositionLocalProvider(
         LocalBackdropLayerManager provides manager
     ) {
         LayeredLayout(modifier = modifier) {
             layer(tag = QuadLevelLayers.Background) { _ ->
-                Box(Modifier.layeredBackdropSource(QuadLevelLayers.Background)) {
-                    background()
+                CompositionLocalProvider(LocalBackdropLayerName provides null) {
+                    Box(
+                        if (captureBackground) Modifier.layeredBackdropSource(QuadLevelLayers.Background)
+                        else Modifier
+                    ) {
+                        background()
+                    }
                 }
             }
             layer(tag = QuadLevelLayers.Midground) { previousLayers ->
-                Box(Modifier.layeredBackdropSource(QuadLevelLayers.Midground)) {
-                    previousLayers()
-                    midground()
+                CompositionLocalProvider(LocalBackdropLayerName provides QuadLevelLayers.Background) {
+                    Box(
+                        if (captureMidground) Modifier.layeredBackdropSource(QuadLevelLayers.Midground)
+                        else Modifier
+                    ) {
+                        previousLayers()
+                        midground?.invoke()
+                    }
                 }
             }
             layer(tag = QuadLevelLayers.Foreground) { previousLayers ->
-                Box(Modifier.layeredBackdropSource(QuadLevelLayers.Foreground)) {
-                    previousLayers()
-                    foreground()
+                CompositionLocalProvider(LocalBackdropLayerName provides QuadLevelLayers.Midground) {
+                    Box(
+                        if (captureForeground) Modifier.layeredBackdropSource(QuadLevelLayers.Foreground)
+                        else Modifier
+                    ) {
+                        previousLayers()
+                        foreground?.invoke()
+                    }
                 }
             }
             layer(tag = QuadLevelLayers.Overlay) { previousLayers ->
-                Box {
-                    previousLayers()
-                    overlay()
+                CompositionLocalProvider(LocalBackdropLayerName provides QuadLevelLayers.Foreground) {
+                    Box {
+                        previousLayers()
+                        overlay?.invoke()
+                    }
                 }
             }
         }
     }
 }
+@SuppressLint("ComposeCompositionLocalUsage")
+val LocalBackdropLayerName = staticCompositionLocalOf<String?> { null }

@@ -41,7 +41,6 @@ import android.graphics.RuntimeShader
 import android.graphics.Shader
 import android.os.Build
 import android.os.SystemClock
-import android.util.Log
 import androidx.annotation.FloatRange
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.layout.PaddingValues
@@ -130,7 +129,6 @@ internal fun ImageBitmap.softwareCopyFromHardware(): ImageBitmap? {
     return try {
         bitmap.copy(Bitmap.Config.ARGB_8888, false)?.asImageBitmap()
     } catch (e: Exception) {
-        Log.w("BackdropSnapshot", "Failed to copy hardware bitmap for CPU fallback", e)
         null
     }
 }
@@ -549,7 +547,6 @@ private class BackdropSourceNode(
                     state.onPictureRecorded(picture, w, h)
                 }
             } catch (e: Exception) {
-                Log.e("BackdropSource", "Failed to capture backdrop source", e)
             }
         } else {
             state.requestCaptureAfterPendingWork()
@@ -1331,15 +1328,7 @@ class BackdropState internal constructor(
                         useHardwareSnapshot = true
                         lastCaptureTime = 0L
                         requestCapture()
-                    } else if (isHardwareBitmapSoftwareFailure(e)) {
-                        Log.w(
-                            "BackdropState",
-                            "Software capture failed because the source requires hardware rendering, " +
-                                    "but hardware acceleration is disabled.",
-                            e
-                        )
-                    } else {
-                        Log.w("BackdropState", "Processing failed (${scaledW}x${scaledH})", e)
+                    } else if (!isHardwareBitmapSoftwareFailure(e)) {
                         scheduleFollowUpCapture()
                     }
                 }
@@ -1419,7 +1408,6 @@ class BackdropState internal constructor(
     ) {
         processingJob = null
         requestCapture()
-        Log.w("BackdropState", "Hardware layer capture failed (${session.scaledW}x${session.scaledH})", error)
     }
 
     private fun applyMasterImage(
@@ -1778,7 +1766,6 @@ private fun cropBitmap(source: ImageBitmap, rect: Rect): ImageBitmap? {
         )
         out.asImageBitmap()
     } catch (e: Exception) {
-        Log.w("BackdropCrop", "Failed to crop bitmap (${w}x${h})", e)
         null
     }
 }
