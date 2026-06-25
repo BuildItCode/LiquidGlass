@@ -1,6 +1,5 @@
 package com.builditcode.glass
 
-
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.ui.geometry.Offset
@@ -15,7 +14,6 @@ import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.toIntSize
-
 
 /**
  * Hardware backend (API 33+): live GPU capture via [GraphicsLayer] with RenderEffect-based
@@ -71,9 +69,7 @@ internal object HardwareBackdropCapture : BackdropCaptureBackend {
 
         if (drawCache.shouldRecord(captureResult, targetSize)) {
             targetLayer.record(size = targetSize) {
-                translate(captureResult.drawOffset.x, captureResult.drawOffset.y) {
-                    drawLayerBackedResult(captureResult)
-                }
+                drawLayerBackedResult(captureResult)
             }
             drawCache.markRecorded(captureResult, targetSize)
         }
@@ -87,18 +83,23 @@ internal object HardwareBackdropCapture : BackdropCaptureBackend {
     private fun DrawScope.drawLayerBackedResult(result: BackdropState.CaptureResult) {
         val layer = result.masterLayer ?: return
         val scale = result.captureScaleFactor.coerceAtLeast(0.001f)
-        clipRect(
-            left = 0f,
-            top = 0f,
-            right = result.drawSize.width.toFloat(),
-            bottom = result.drawSize.height.toFloat()
-        ) {
-            scale(1f / scale, 1f / scale, pivot = Offset.Zero) {
-                translate(
-                    -result.srcOffset.x.toFloat(),
-                    -result.srcOffset.y.toFloat()
-                ) {
-                    drawLayer(layer)
+
+        translate(result.drawOffset.x, result.drawOffset.y) {
+            clipRect(
+                left = 0f,
+                top = 0f,
+                right = result.drawSize.width.toFloat(),
+                bottom = result.drawSize.height.toFloat()
+            ) {
+                translate(result.sampleOffset.x, result.sampleOffset.y) {
+                    scale(1f / scale, 1f / scale, pivot = Offset.Zero) {
+                        translate(
+                            -result.srcOffset.x.toFloat(),
+                            -result.srcOffset.y.toFloat()
+                        ) {
+                            drawLayer(layer)
+                        }
+                    }
                 }
             }
         }

@@ -1080,6 +1080,7 @@ class BackdropState internal constructor(
         val srcOffset: IntOffset,
         val srcSize: IntSize,
         val drawOffset: Offset,
+        val sampleOffset: Offset,
         val drawSize: IntSize,
         val fallbackBitmap: ImageBitmap? = null,
         val fallbackBlurRadiusPx: Int = 0,
@@ -1094,6 +1095,7 @@ class BackdropState internal constructor(
         val srcOffset: IntOffset,
         val srcSize: IntSize,
         val drawOffset: Offset,
+        val sampleOffset: Offset,
         val drawSize: IntSize
     )
 
@@ -1552,26 +1554,46 @@ class BackdropState internal constructor(
     }
 
     private fun cropGeometryForRegion(
-        regionRect: Rect, source: Rect, scaledW: Int, scaledH: Int
+        regionRect: Rect,
+        source: Rect,
+        scaledW: Int,
+        scaledH: Int
     ): CropGeometry? {
         val intersection = regionRect.intersect(source)
         if (intersection.isEmpty) return null
 
-        val rawCrop = intersection.translate(-source.left, -source.top).scale(scaleFactor)
+        val rawCrop = intersection
+            .translate(-source.left, -source.top)
+            .scale(scaleFactor)
 
         val l = rawCrop.left.roundToInt().coerceIn(0, scaledW)
         val t = rawCrop.top.roundToInt().coerceIn(0, scaledH)
         val r = rawCrop.right.roundToInt().coerceIn(0, scaledW)
         val b = rawCrop.bottom.roundToInt().coerceIn(0, scaledH)
-        val w = r - l; val h = b - t
+
+        val w = r - l
+        val h = b - t
         if (w <= 0 || h <= 0) return null
 
-        val errorX = (l - rawCrop.left) / scaleFactor
-        val errorY = (t - rawCrop.top) / scaleFactor
-        val drawOffset = (intersection.topLeft - regionRect.topLeft) + Offset(errorX, errorY)
-        val drawSize = IntSize((w / scaleFactor).roundToInt(), (h / scaleFactor).roundToInt())
+        val visibleOffset = intersection.topLeft - regionRect.topLeft
 
-        return CropGeometry(IntOffset(l, t), IntSize(w, h), drawOffset, drawSize)
+        val sampleOffset = Offset(
+            x = (l - rawCrop.left) / scaleFactor,
+            y = (t - rawCrop.top) / scaleFactor
+        )
+
+        val visibleSize = IntSize(
+            width = intersection.width.roundToInt().coerceAtLeast(1),
+            height = intersection.height.roundToInt().coerceAtLeast(1)
+        )
+
+        return CropGeometry(
+            srcOffset = IntOffset(l, t),
+            srcSize = IntSize(w, h),
+            drawOffset = visibleOffset,
+            sampleOffset = sampleOffset,
+            drawSize = visibleSize
+        )
     }
 
     private fun cropForRegion(
@@ -1614,6 +1636,7 @@ class BackdropState internal constructor(
             srcOffset = geometry.srcOffset,
             srcSize = geometry.srcSize,
             drawOffset = geometry.drawOffset,
+            sampleOffset = geometry.sampleOffset,
             drawSize = geometry.drawSize,
             fallbackBitmap = fallback,
             fallbackBlurRadiusPx = fallbackBlurRadiusPx,
@@ -1631,6 +1654,7 @@ class BackdropState internal constructor(
                 srcOffset == geometry.srcOffset &&
                 srcSize == geometry.srcSize &&
                 drawOffset == geometry.drawOffset &&
+                sampleOffset == geometry.sampleOffset &&
                 drawSize == geometry.drawSize
 }
 
