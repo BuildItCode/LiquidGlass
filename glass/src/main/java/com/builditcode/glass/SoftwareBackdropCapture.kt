@@ -15,17 +15,22 @@ import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 /**
- * Legacy (< API 33) backend: Picture/bitmap capture with CPU blur.
+ * Software backend: [android.graphics.Picture]/bitmap capture with CPU blur.
+ *
+ * Used whenever the hardware capture path ([HardwareBackdropCapture]) is unavailable — below
+ * API 33, or when hardware acceleration is disabled for the backdrop. See
+ * [backdropCaptureBackend] / [BackdropState.backend] for selection.
  *
  * Region fallbacks are crops of a master that was already stack-blurred per distinct
  * region radius on [Dispatchers.Default], so steady-state draws are plain bitmap blits
  * with no main-thread blur. The only draw-time CPU work is the transitional case where
  * a region's radius changed after the last capture: an unblurred fallback gets a one-off
  * draw-time blur, and a pre-blurred fallback with a stale radius keeps its previous blur
- * level until the requested recapture lands. Hardware snapshot readback and the
- * software-config copy both run off the main thread.
+ * level until the requested recapture lands. When the software picture cannot read a
+ * hardware-accelerated source, capture promotes to a hardware-layer snapshot read back to a
+ * software bitmap; that readback and the software-config copy both run off the main thread.
  */
-internal object BackdropCaptureLegacy : BackdropCaptureBackend {
+internal object SoftwareBackdropCapture : BackdropCaptureBackend {
     override val createsFallbackBitmap: Boolean = true
     override val requiresContinuousCapture: Boolean = true
 

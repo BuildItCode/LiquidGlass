@@ -90,6 +90,7 @@ import androidx.compose.ui.node.observeReads
 import androidx.compose.ui.node.requireGraphicsContext
 import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -108,6 +109,7 @@ import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.time.Duration.Companion.milliseconds
 
 // =============================================================================
 // BITMAP LIFECYCLE
@@ -186,12 +188,17 @@ fun rememberBackdropManager(
     disableHardwareAcceleration: Boolean = false
 ): BackdropLayerManager {
     val scope = rememberCoroutineScope()
-    val manager = remember(scope, defaultScaleFactor, defaultDebounceMs, disableHardwareAcceleration) {
+    // Fall back to software capture when the caller opts out, or when this device/window is not
+    // hardware accelerated (the hardware backend needs a hardware-accelerated canvas to run its
+    // RenderEffect blur/glass). The API-level gate lives in [BackdropState.backend].
+    val hardwareAccelerated = LocalView.current.isHardwareAccelerated
+    val forceSoftware = disableHardwareAcceleration || !hardwareAccelerated
+    val manager = remember(scope, defaultScaleFactor, defaultDebounceMs, forceSoftware) {
         BackdropLayerManager(
             scope = scope,
             defaultScaleFactor = defaultScaleFactor,
             defaultDebounceMs = defaultDebounceMs,
-            disableHardwareAcceleration = disableHardwareAcceleration
+            disableHardwareAcceleration = forceSoftware
         )
     }
     DisposableEffect(manager) { onDispose { manager.disposeAll() } }
@@ -291,11 +298,15 @@ val LocalBackdropLayerManager = staticCompositionLocalOf<BackdropLayerManager?> 
 // SDK IMPLEMENTATION ROUTING
 // =============================================================================
 
+/**
+ * Capability-based default backend: hardware capture when the platform supports it (API 33+),
+ * otherwise software. A specific [BackdropState] may still resolve to software via
+ * [BackdropState.backend] when hardware acceleration is disabled for that backdrop. Used where
+ * a backend is needed without a state in hand (e.g. configuring a capture node's layer on attach).
+ */
 internal val backdropCaptureBackend: BackdropCaptureBackend =
-    when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> BackdropCaptureApi33
-        else -> BackdropCaptureLegacy
-    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) HardwareBackdropCapture
+    else SoftwareBackdropCapture
 
 internal interface BackdropCaptureBackend {
     val createsFallbackBitmap: Boolean
@@ -507,7 +518,7 @@ private class BackdropSourceNode(
 
         if (w > 0 && h > 0 && state.shouldCapture) {
             try {
-                if (backdropCaptureBackend.usesHardwareLayerForSource(state)) {
+                if (state.backend.usesHardwareLayerForSource(state)) {
                     val outerScope = this
                     drawingBackdropSource(layerName) {
                         drawContent()
@@ -526,7 +537,7 @@ private class BackdropSourceNode(
                             }
                         }
                     }
-                    backdropCaptureBackend.onHardwareLayerRecorded(
+                    state.backend.onHardwareLayerRecorded(
                         state = state,
                         layer = layer,
                         captureSize = captureSize
@@ -712,7 +723,7 @@ private class BackdropCaptureNode(
             return
         }
 
-        backdropCaptureBackend.run {
+        (cachedState?.backend ?: backdropCaptureBackend).run {
             drawCapture(
                 filter = filter,
                 shape = shape,
@@ -759,7 +770,7 @@ private class BackdropCaptureNode(
      * Always zero on GPU backends so radius changes never trigger spurious recaptures.
      */
     private fun currentCpuBlurRadiusPx(): Int {
-        if (!backdropCaptureBackend.createsFallbackBitmap) return 0
+        if (!(cachedState?.backend ?: backdropCaptureBackend).createsFallbackBitmap) return 0
         val density = currentValueOf(LocalDensity).density
         return (filter.blurRadiusIntensity * 2f * density).roundToInt()
     }
@@ -1134,6 +1145,16 @@ class BackdropState internal constructor(
     internal val isHardwareAccelerationDisabled: Boolean
         get() = disableHardwareAcceleration
 
+    /**
+     * Backend for this backdrop: hardware when the platform supports it (API 33+) and hardware
+     * acceleration is enabled for this backdrop, otherwise software.
+     */
+    internal val backend: BackdropCaptureBackend =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !disableHardwareAcceleration)
+            HardwareBackdropCapture
+        else
+            SoftwareBackdropCapture
+
     internal val captureScaleFactor: Float
         get() = scaleFactor
 
@@ -1229,7 +1250,7 @@ class BackdropState internal constructor(
 
     /** Distinct nonzero blur radii currently requested by regions (legacy backend only). */
     internal fun pendingCpuBlurRadii(): Set<Int> {
-        if (!backdropCaptureBackend.createsFallbackBitmap) return emptySet()
+        if (!backend.createsFallbackBitmap) return emptySet()
         val radii = HashSet<Int>()
         regions.values.forEach { region ->
             if (region.cpuBlurRadiusPx > 0) radii.add(region.cpuBlurRadiusPx)
@@ -1520,12 +1541,12 @@ class BackdropState internal constructor(
             invalidateOrSchedule()
             return
         }
-        if (!backdropCaptureBackend.requiresContinuousCapture && !disableHardwareAcceleration) return
+        if (!backend.requiresContinuousCapture) return
         if (regions.isEmpty() || !isUpdateEnabled()) return
         if (scheduledJob?.isActive == true) return
         scheduledJob = scope.launch {
             val remaining = (debounceMs - (SystemClock.uptimeMillis() - lastCaptureTime)).coerceAtLeast(1L)
-            delay(remaining)
+            delay(remaining.milliseconds)
             if (regions.isNotEmpty() && isUpdateEnabled()) sourceInvalidator++
         }
     }
@@ -1572,7 +1593,7 @@ class BackdropState internal constructor(
         regionBlurRadiusPx: Int
     ): CaptureResult {
         var fallbackBlurRadiusPx = 0
-        val fallback = if (backdropCaptureBackend.createsFallbackBitmap && masterImage != null) {
+        val fallback = if (backend.createsFallbackBitmap && masterImage != null) {
             val cropSource = blurredMasters[regionBlurRadiusPx]
                 ?.also { fallbackBlurRadiusPx = regionBlurRadiusPx }
                 ?: masterImage

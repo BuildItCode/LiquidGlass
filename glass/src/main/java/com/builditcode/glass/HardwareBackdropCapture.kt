@@ -1,9 +1,9 @@
 package com.builditcode.glass
 
+
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -18,8 +18,13 @@ import androidx.compose.ui.unit.toIntSize
 
 
 /**
- * API 33+ backend: live GPU capture via [GraphicsLayer] with RenderEffect-based
+ * Hardware backend (API 33+): live GPU capture via [GraphicsLayer] with RenderEffect-based
  * blur/glass.
+ *
+ * This backend is hardware-only. The source is always recorded into a live [GraphicsLayer]
+ * (never the software [android.graphics.Picture] path), and the capture node draws that layer
+ * directly with a RenderEffect. Devices/APIs that cannot use hardware capture fall back to
+ * [SoftwareBackdropCapture]; see [backdropCaptureBackend] / [BackdropState.backend].
  *
  * The capture node's target layer is re-recorded only when the capture result or node
  * size changes; otherwise the existing display list is drawn as-is and the previously
@@ -28,12 +33,12 @@ import androidx.compose.ui.unit.toIntSize
  * released or retained here.
  */
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
-internal object BackdropCaptureApi33 : BackdropCaptureBackend {
+internal object HardwareBackdropCapture : BackdropCaptureBackend {
     override val createsFallbackBitmap: Boolean = false
     override val requiresContinuousCapture: Boolean = false
 
-    override fun usesHardwareLayerForSource(state: BackdropState): Boolean =
-        !state.isHardwareAccelerationDisabled
+    // Hardware backend always records the source into a live GraphicsLayer.
+    override fun usesHardwareLayerForSource(state: BackdropState): Boolean = true
 
     override fun configureCaptureLayer(layer: GraphicsLayer) {
         layer.compositingStrategy = CompositingStrategy.Offscreen
@@ -67,7 +72,7 @@ internal object BackdropCaptureApi33 : BackdropCaptureBackend {
         if (drawCache.shouldRecord(captureResult, targetSize)) {
             targetLayer.record(size = targetSize) {
                 translate(captureResult.drawOffset.x, captureResult.drawOffset.y) {
-                    drawCaptureResult(captureResult)
+                    drawLayerBackedResult(captureResult)
                 }
             }
             drawCache.markRecorded(captureResult, targetSize)
@@ -76,17 +81,6 @@ internal object BackdropCaptureApi33 : BackdropCaptureBackend {
         when (filter) {
             is BackdropFilter.Blur -> drawBlur(filter, targetLayer, density, drawCache)
             is BackdropFilter.Glass -> drawGlass(filter, shape, targetLayer, density, drawCache)
-        }
-    }
-
-    private fun DrawScope.drawCaptureResult(result: BackdropState.CaptureResult) {
-        when {
-            result.masterLayer != null -> drawLayerBackedResult(result)
-            result.fallbackBitmap != null -> drawImage(
-                image = result.fallbackBitmap,
-                dstSize = result.drawSize
-            )
-            result.masterImage != null -> drawImageBackedResult(result.masterImage, result)
         }
     }
 
@@ -108,18 +102,6 @@ internal object BackdropCaptureApi33 : BackdropCaptureBackend {
                 }
             }
         }
-    }
-
-    private fun DrawScope.drawImageBackedResult(
-        image: ImageBitmap,
-        result: BackdropState.CaptureResult
-    ) {
-        drawImage(
-            image = image,
-            srcOffset = result.srcOffset,
-            srcSize = result.srcSize,
-            dstSize = result.drawSize
-        )
     }
 
     private fun ContentDrawScope.drawBlur(
