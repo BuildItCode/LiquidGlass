@@ -19,23 +19,17 @@ import androidx.compose.ui.unit.toIntSize
  * Hardware backend (API 33+): live GPU capture via [GraphicsLayer] with RenderEffect-based
  * blur/glass.
  *
- * This backend is hardware-only. The source is always recorded into a live [GraphicsLayer]
- * (never the software [android.graphics.Picture] path), and the capture node draws that layer
- * directly with a RenderEffect. Devices/APIs that cannot use hardware capture fall back to
- * [SoftwareBackdropCapture]; see [backdropCaptureBackend] / [BackdropState.backend].
- *
- * The capture node's target layer is re-recorded only when the capture result or node
- * size changes; otherwise the existing display list is drawn as-is and the previously
- * applied render effect is left untouched, so static frames perform zero RenderNode
- * writes. Master layers are owned by the source node (ping-pong pair) and are never
- * released or retained here.
+ * Optimized movement path:
+ * - The target layer is re-recorded only when the local crop/result or node size changes.
+ * - Sub-pixel crop correction is applied inside the clipped region via [CaptureResult.sampleOffset].
+ *   This avoids moving the clip edge when a glass component animates at fractional/scaled positions.
+ * - Source masters are still owned by the source node and are not retained/released here.
  */
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
 internal object HardwareBackdropCapture : BackdropCaptureBackend {
     override val createsFallbackBitmap: Boolean = false
     override val requiresContinuousCapture: Boolean = false
 
-    // Hardware backend always records the source into a live GraphicsLayer.
     override fun usesHardwareLayerForSource(state: BackdropState): Boolean = true
 
     override fun configureCaptureLayer(layer: GraphicsLayer) {

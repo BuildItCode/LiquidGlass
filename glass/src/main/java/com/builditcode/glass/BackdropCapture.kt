@@ -71,6 +71,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.draw
 import androidx.compose.ui.graphics.drawscope.scale
@@ -78,7 +79,6 @@ import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.positionInRoot
-import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.node.CompositionLocalConsumerModifierNode
 import androidx.compose.ui.node.DrawModifierNode
 import androidx.compose.ui.node.GlobalPositionAwareModifierNode
@@ -353,9 +353,6 @@ private inline fun <T> recordingBackdropSource(layerName: String, block: () -> T
     }
 }
 
-private fun isRecordingAnyBackdropSource(): Boolean =
-    recordingBackdropSources.get()?.isNotEmpty() == true
-
 private fun isRecordingBackdropSource(layerName: String): Boolean =
     recordingBackdropSources.get()?.contains(layerName) == true
 
@@ -371,9 +368,6 @@ private inline fun <T> drawingBackdropSource(layerName: String, block: () -> T):
 
 private fun isDrawingBackdropSource(layerName: String): Boolean =
     drawingBackdropSources.get()?.contains(layerName) == true
-
-private fun isDrawingAnyBackdropSource(): Boolean =
-    drawingBackdropSources.get()?.isNotEmpty() == true
 
 // =============================================================================
 // PUBLIC MODIFIERS
@@ -627,14 +621,8 @@ private class BackdropCaptureNode(
 
     private var cachedState: BackdropState? = null
     private var regionId: Int = -1
-    private var lastPosition = Offset.Unspecified
     private var graphicsLayer: GraphicsLayer? = null
     private var lastResult: BackdropState.CaptureResult? = null
-    private var recordingSnapshot: ImageBitmap? = null
-    private var recordingSnapshotJob: Job? = null
-    private var recordingSnapshotResult: BackdropState.CaptureResult? = null
-    private var recordingSnapshotFilter: BackdropFilter? = null
-    private var recordingSnapshotSize = IntSize.Zero
     private val drawCache = CaptureDrawCache()
 
     fun update(newName: String, newShape: Shape, newFilter: BackdropFilter, newAutoMove: Boolean) {
@@ -647,10 +635,8 @@ private class BackdropCaptureNode(
             layerName = newName
             cachedState = null
             lastResult = null
-            clearRecordingSnapshot()
             drawCache.clear()
         }
-        if (shapeChanged || filterChanged) clearRecordingSnapshot()
         shape = newShape
         filter = newFilter
         autoInvalidateOnMove = newAutoMove
@@ -678,14 +664,8 @@ private class BackdropCaptureNode(
         val rect = Rect(coordinates.positionInRoot(), coordinates.size.toSize())
         state?.registerRegion(regionId, rect, currentCpuBlurRadiusPx())
 
-        if (autoInvalidateOnMove) {
-            val pos = coordinates.positionInWindow()
-            if (lastPosition != Offset.Unspecified && lastPosition != pos) {
-                if (state?.getResult(regionId) == null) {
-                    state?.requestCapture()
-                }
-            }
-            lastPosition = pos
+        if (autoInvalidateOnMove && state != null && state.getResult(regionId) == null) {
+            state.requestCapture()
         }
     }
 
@@ -709,20 +689,6 @@ private class BackdropCaptureNode(
             drawCache.cpuBlur.clear()
         }
 
-        if (isRecordingAnyBackdropSource() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            recordingSnapshot?.let { snapshot ->
-                drawImage(
-                    image = snapshot,
-                    dstSize = IntSize(
-                        size.width.roundToInt().coerceAtLeast(1),
-                        size.height.roundToInt().coerceAtLeast(1)
-                    )
-                )
-            }
-            drawContent()
-            return
-        }
-
         (cachedState?.backend ?: backdropCaptureBackend).run {
             drawCapture(
                 filter = filter,
@@ -733,18 +699,13 @@ private class BackdropCaptureNode(
                 drawCache = drawCache
             )
         }
-        if (isDrawingAnyBackdropSource()) {
-            updateRecordingSnapshot(result)
-        }
         drawContent()
     }
 
     override fun onReset() {
         cachedState?.unregisterRegion(regionId)
         cachedState = null
-        lastPosition = Offset.Unspecified
         lastResult = null
-        clearRecordingSnapshot()
         drawCache.clear()
     }
 
@@ -760,7 +721,6 @@ private class BackdropCaptureNode(
             }
         }
         graphicsLayer = null
-        clearRecordingSnapshot()
         drawCache.clear()
         cachedState = null
     }
@@ -775,47 +735,7 @@ private class BackdropCaptureNode(
         return (filter.blurRadiusIntensity * 2f * density).roundToInt()
     }
 
-    private fun updateRecordingSnapshot(result: BackdropState.CaptureResult?) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-        result ?: return
-        val layer = graphicsLayer ?: return
-        val snapshotSize = IntSize(
-            layer.size.width.coerceAtLeast(1),
-            layer.size.height.coerceAtLeast(1)
-        )
-        if (
-            recordingSnapshotResult === result &&
-            recordingSnapshotFilter == filter &&
-            recordingSnapshotSize == snapshotSize &&
-            recordingSnapshot != null
-        ) {
-            return
-        }
-        if (recordingSnapshotJob?.isActive == true) return
 
-        val snapshotResult = result
-        val snapshotFilter = filter
-        recordingSnapshotJob = coroutineScope.launch(Dispatchers.Main) {
-            val snapshot = runCatching { layer.toImageBitmap() }.getOrNull() ?: return@launch
-            val oldSnapshot = recordingSnapshot
-            recordingSnapshot = snapshot
-            recordingSnapshotResult = snapshotResult
-            recordingSnapshotFilter = snapshotFilter
-            recordingSnapshotSize = snapshotSize
-            oldSnapshot?.safeRecycle()
-            invalidateDraw()
-        }
-    }
-
-    private fun clearRecordingSnapshot() {
-        recordingSnapshotJob?.cancel()
-        recordingSnapshotJob = null
-        recordingSnapshot?.safeRecycle()
-        recordingSnapshot = null
-        recordingSnapshotResult = null
-        recordingSnapshotFilter = null
-        recordingSnapshotSize = IntSize.Zero
-    }
 }
 
 // =============================================================================
@@ -1576,7 +1496,6 @@ class BackdropState internal constructor(
         if (w <= 0 || h <= 0) return null
 
         val visibleOffset = intersection.topLeft - regionRect.topLeft
-
         val sampleOffset = Offset(
             x = (l - rawCrop.left) / scaleFactor,
             y = (t - rawCrop.top) / scaleFactor
@@ -1673,10 +1592,31 @@ internal fun ContentDrawScope.drawBitmapInCaptureRegion(
     bitmap: ImageBitmap,
     result: BackdropState.CaptureResult?
 ) {
-    val drawSize = result?.drawSize ?: IntSize(size.width.toInt(), size.height.toInt())
-    val drawOffset = result?.drawOffset ?: Offset.Zero
-    translate(drawOffset.x, drawOffset.y) {
-        drawImage(bitmap, dstSize = drawSize)
+    if (result == null) {
+        drawImage(
+            image = bitmap,
+            dstSize = IntSize(size.width.toInt(), size.height.toInt())
+        )
+        return
+    }
+
+    val scale = result.captureScaleFactor.coerceAtLeast(0.001f)
+    val sampledDrawSize = IntSize(
+        width = (result.srcSize.width / scale).roundToInt().coerceAtLeast(1),
+        height = (result.srcSize.height / scale).roundToInt().coerceAtLeast(1)
+    )
+
+    translate(result.drawOffset.x, result.drawOffset.y) {
+        clipRect(
+            left = 0f,
+            top = 0f,
+            right = result.drawSize.width.toFloat(),
+            bottom = result.drawSize.height.toFloat()
+        ) {
+            translate(result.sampleOffset.x, result.sampleOffset.y) {
+                drawImage(bitmap, dstSize = sampledDrawSize)
+            }
+        }
     }
 }
 
