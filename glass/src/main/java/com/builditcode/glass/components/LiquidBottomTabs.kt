@@ -18,6 +18,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -67,6 +68,8 @@ fun LiquidBottomTabs(
     selectionColor: Color = LiquidComponentDefaults.bottomTabsSelectionColor(),
     content: @Composable RowScope.() -> Unit
 ) {
+    if (tabsCount <= 0) return
+
     val tabsBackdrop = rememberLayerBackdrop()
 
     BoxWithConstraints(
@@ -75,28 +78,32 @@ fun LiquidBottomTabs(
     ) {
         val density = LocalDensity.current
         val tabWidth = with(density) {
-            (constraints.maxWidth.toFloat() - 8f.dp.toPx()) / tabsCount
+            (constraints.maxWidth.toFloat() - 8f.dp.toPx()).coerceAtLeast(1f) / tabsCount
         }
 
         val offsetAnimation = remember { Animatable(0f) }
-        val panelOffset by remember(density) {
+        val panelOffsetState = remember(density, constraints.maxWidth) {
             derivedStateOf {
-                val fraction = (offsetAnimation.value / constraints.maxWidth).fastCoerceIn(-1f, 1f)
+                val width = constraints.maxWidth.coerceAtLeast(1)
+                val fraction = (offsetAnimation.value / width).fastCoerceIn(-1f, 1f)
                 with(density) {
                     4f.dp.toPx() * fraction.sign * EaseOut.transform(abs(fraction))
                 }
             }
         }
+        val panelOffset by panelOffsetState
 
         val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
         val animationScope = rememberCoroutineScope()
-        var currentIndex by remember(selectedTabIndex) {
-            mutableIntStateOf(selectedTabIndex())
+        val currentSelectedTabIndex by rememberUpdatedState(selectedTabIndex)
+        val currentOnTabSelected by rememberUpdatedState(onTabSelected)
+        var currentIndex by remember(tabsCount) {
+            mutableIntStateOf(currentSelectedTabIndex().coerceIn(0, tabsCount - 1))
         }
-        val dampedDragAnimation = remember(animationScope) {
+        val dampedDragAnimation = remember(animationScope, tabsCount, tabWidth, isLtr) {
             DampedDragAnimation(
                 animationScope = animationScope,
-                initialValue = selectedTabIndex().toFloat(),
+                initialValue = currentSelectedTabIndex().coerceIn(0, tabsCount - 1).toFloat(),
                 valueRange = 0f..(tabsCount - 1).toFloat(),
                 visibilityThreshold = 0.001f,
                 initialScale = 1f,
@@ -106,6 +113,17 @@ fun LiquidBottomTabs(
                     val targetIndex = targetValue.fastRoundToInt().fastCoerceIn(0, tabsCount - 1)
                     currentIndex = targetIndex
                     animateToValue(targetIndex.toFloat())
+                    animationScope.launch {
+                        offsetAnimation.animateTo(
+                            0f,
+                            spring(1f, 300f, 0.5f)
+                        )
+                    }
+                },
+                onDragCancelled = {
+                    val selectedIndex = currentSelectedTabIndex().coerceIn(0, tabsCount - 1)
+                    currentIndex = selectedIndex
+                    updateValue(selectedIndex.toFloat())
                     animationScope.launch {
                         offsetAnimation.animateTo(
                             0f,
@@ -124,28 +142,31 @@ fun LiquidBottomTabs(
                 }
             )
         }
-        LaunchedEffect(selectedTabIndex) {
-            snapshotFlow { selectedTabIndex() }
+        LaunchedEffect(tabsCount) {
+            snapshotFlow { currentSelectedTabIndex() }
                 .collectLatest { index ->
-                    currentIndex = index
+                    currentIndex = index.coerceIn(0, tabsCount - 1)
                 }
         }
         LaunchedEffect(dampedDragAnimation) {
             snapshotFlow { currentIndex }
                 .drop(1)
                 .collectLatest { index ->
-                    dampedDragAnimation.animateToValue(index.toFloat())
-                    onTabSelected(index)
+                    val targetIndex = index.coerceIn(0, tabsCount - 1)
+                    dampedDragAnimation.animateToValue(targetIndex.toFloat())
+                    if (currentSelectedTabIndex() != targetIndex) {
+                        currentOnTabSelected(targetIndex)
+                    }
                 }
         }
 
-        val interactiveHighlight = remember(animationScope) {
+        val interactiveHighlight = remember(animationScope, isLtr, tabWidth, dampedDragAnimation) {
             InteractiveHighlight(
                 animationScope = animationScope,
                 position = { size, offset ->
                     Offset(
-                        if (isLtr) (dampedDragAnimation.value + 0.5f) * tabWidth + panelOffset
-                        else size.width - (dampedDragAnimation.value + 0.5f) * tabWidth + panelOffset,
+                        if (isLtr) (dampedDragAnimation.value + 0.5f) * tabWidth + panelOffsetState.value
+                        else size.width - (dampedDragAnimation.value + 0.5f) * tabWidth + panelOffsetState.value,
                         size.height / 2f
                     )
                 }
@@ -167,7 +188,12 @@ fun LiquidBottomTabs(
                     },
                     layerBlock = {
                         val progress = dampedDragAnimation.pressProgress
-                        val scale = lerp(1f, 1f + 16f.dp.toPx() / size.width, progress)
+                        val scale =
+                            if (size.width > 0f) {
+                                lerp(1f, 1f + 16f.dp.toPx() / size.width, progress)
+                            } else {
+                                1f
+                            }
                         scaleX = scale
                         scaleY = scale
                     },

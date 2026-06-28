@@ -96,7 +96,6 @@ internal fun LiquidSurface(
     softness: Float = 0.06f,
     content: @Composable BoxScope.() -> Unit
 ) {
-    val adaptiveLuminanceState = rememberAdaptiveLuminanceState()
     val liquidShape = LiquidMorphShape(
         baseShape = shape,
         progress = visuals.shapeMorph
@@ -109,6 +108,7 @@ internal fun LiquidSurface(
 
     surfaceModifier = if (layerName != null) {
         if (adaptiveLuminance) {
+            val adaptiveLuminanceState = rememberAdaptiveLuminanceState()
             surfaceModifier.layeredAdaptiveLuminanceBackdropCapture(
                 layerName = layerName,
                 state = adaptiveLuminanceState,
@@ -145,16 +145,12 @@ internal fun LiquidSurface(
         ),
         contentAlignment = Alignment.Center
     ) {
-        val hasAdaptiveLuminanceSample =
-            !adaptiveLuminance || adaptiveLuminanceState.hasLuminanceSample
         val surfaceFill = Modifier
             .matchParentSize()
             .clip(liquidShape)
         Box(
             if (layerName == null) {
                 surfaceFill.background(colors.tint)
-            } else if (!hasAdaptiveLuminanceSample) {
-                surfaceFill
             } else {
                 surfaceFill.background(
                     Brush.verticalGradient(
@@ -188,23 +184,21 @@ internal fun LiquidGlassHandle(
     blurRadiusIntensity: Float = 4f,
     adaptiveLuminance: Boolean = true
 ) {
-    val adaptiveLuminanceState = rememberAdaptiveLuminanceState()
     var handleModifier = modifier.graphicsLayer {
         alpha = if (enabled) 1f else 0.48f
     }
     handleModifier = if (layerName != null) {
         if (adaptiveLuminance) {
+            val adaptiveLuminanceState = rememberAdaptiveLuminanceState()
             handleModifier.layeredAdaptiveLuminanceBackdropCapture(
                 layerName = layerName,
                 state = adaptiveLuminanceState,
                 shape = { shape },
                 effects = {
-                    if (hasLuminanceSample) {
-                        liquidGlassEffects(
-                            blurRadiusIntensity = blurRadiusIntensity,
-                            luminance = luminance
-                        )
-                    }
+                    liquidGlassEffects(
+                        blurRadiusIntensity = blurRadiusIntensity,
+                        luminance = if (hasLuminanceSample) luminance else null
+                    )
                 }
             )
         } else {
@@ -233,16 +227,12 @@ internal fun LiquidGlassHandle(
             rotationDegrees = borderRotationDegrees
         )
     ) {
-        val hasAdaptiveLuminanceSample =
-            !adaptiveLuminance || adaptiveLuminanceState.hasLuminanceSample
         val handleFill = Modifier
             .fillMaxSize()
             .clip(shape)
         Box(
             if (layerName == null) {
                 handleFill.background(colors.content)
-            } else if (!hasAdaptiveLuminanceSample) {
-                handleFill
             } else {
                 handleFill.background(
                     Brush.verticalGradient(

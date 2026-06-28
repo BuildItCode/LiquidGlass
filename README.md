@@ -46,7 +46,7 @@ Add the dependency:
 
 ```kotlin
 dependencies {
-    implementation("com.github.BuildItCode:LiquidGlass:0.6.5")
+    implementation("com.github.BuildItCode:LiquidGlass:0.7.0")
 }
 ```
 
@@ -54,7 +54,7 @@ Or with a version catalog:
 
 ```toml
 [versions]
-glass = "0.6.5"
+glass = "0.7.0"
 
 [libraries]
 glass = { group = "com.github.BuildItCode", name = "LiquidGlass", version.ref = "glass" }

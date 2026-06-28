@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
@@ -96,7 +97,7 @@ fun Modifier.layeredBackdropCapture(
     onDrawSurface: (DrawScope.() -> Unit)? = null,
     onDrawFront: (DrawScope.() -> Unit)? = null
 ): Modifier {
-    val backdrop = rememberLayeredBackdrop(layerName) ?: return this
+    val backdrop = rememberLayeredBackdrop(layerName) ?: return clip(shape())
     return drawBackdrop(
         backdrop = backdrop,
         shape = shape,

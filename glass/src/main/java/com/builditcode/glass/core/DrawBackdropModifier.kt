@@ -29,6 +29,7 @@ import androidx.compose.ui.node.GlobalPositionAwareModifierNode
 import androidx.compose.ui.node.LayoutModifierNode
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.ObserverModifierNode
+import androidx.compose.ui.node.invalidateDraw
 import androidx.compose.ui.node.observeReads
 import androidx.compose.ui.node.requireDensity
 import androidx.compose.ui.node.requireGraphicsContext
@@ -410,6 +411,7 @@ private class DrawBackdropNode(
 
     fun invalidateDrawCache() {
         observeEffects()
+        invalidateDraw()
     }
 
     private fun observeEffects() {

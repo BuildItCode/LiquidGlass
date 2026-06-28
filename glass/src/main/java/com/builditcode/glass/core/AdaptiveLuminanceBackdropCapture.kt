@@ -33,7 +33,7 @@ import kotlin.time.Duration.Companion.milliseconds
 import androidx.compose.animation.core.Animatable as FloatAnimatable
 
 private const val FIRST_SAMPLE_RETRY_MILLIS = 48L
-private const val FIRST_SAMPLE_MAX_RETRIES = 5
+private const val FIRST_SAMPLE_MAX_RETRIES = 10
 private const val DEFAULT_SAMPLE_INTERVAL_MILLIS = 1_000L
 private const val DEFAULT_LUMINANCE_ANIMATION_MILLIS = 1_000
 
@@ -173,13 +173,11 @@ fun Modifier.layeredAdaptiveLuminanceBackdropCapture(
         layerName = layerName,
         shape = shape,
         effects = {
-            if (state.hasLuminanceSample) {
-                AdaptiveLuminanceEffectScope(this, state).effects()
-            }
+            AdaptiveLuminanceEffectScope(this, state).effects()
         },
-        highlight = if (state.hasLuminanceSample) highlight else null,
-        shadow = if (state.hasLuminanceSample) shadow else null,
-        innerShadow = if (state.hasLuminanceSample) innerShadow else null,
+        highlight = highlight,
+        shadow = shadow,
+        innerShadow = innerShadow,
         layerBlock = layerBlock,
         onDrawBehind = onDrawBehind,
         onDrawBackdrop = { drawBackdrop ->
@@ -189,8 +187,8 @@ fun Modifier.layeredAdaptiveLuminanceBackdropCapture(
                 sampleGate.markRecorded()
             }
         },
-        onDrawSurface = if (state.hasLuminanceSample) onDrawSurface else null,
-        onDrawFront = if (state.hasLuminanceSample) onDrawFront else null
+        onDrawSurface = onDrawSurface,
+        onDrawFront = onDrawFront
     )
 }
 

@@ -13,6 +13,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -61,40 +62,53 @@ fun LiquidSlider(
         modifier.fillMaxWidth(),
         contentAlignment = Alignment.CenterStart
     ) {
-        val trackWidth = constraints.maxWidth
+        val trackWidth = constraints.maxWidth.coerceAtLeast(1)
+        val rangeStart = valueRange.start
+        val rangeEnd = valueRange.endInclusive
+        val rangeSpan = (rangeEnd - rangeStart).coerceAtLeast(0f)
+        val currentValue by rememberUpdatedState(value)
+        val currentOnValueChange by rememberUpdatedState(onValueChange)
 
         val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
         val animationScope = rememberCoroutineScope()
         var didDrag by remember { mutableStateOf(false) }
-        val dampedDragAnimation = remember(animationScope) {
-            DampedDragAnimation(
-                animationScope = animationScope,
-                initialValue = value(),
-                valueRange = valueRange,
-                visibilityThreshold = visibilityThreshold,
-                initialScale = 1f,
-                pressedScale = 1.5f,
-                onDragStarted = {},
-                onDragStopped = {
-                    if (didDrag) {
-                        onValueChange(targetValue)
+        val dampedDragAnimation =
+            remember(animationScope, valueRange, visibilityThreshold, trackWidth, isLtr) {
+                DampedDragAnimation(
+                    animationScope = animationScope,
+                    initialValue = currentValue(),
+                    valueRange = valueRange,
+                    visibilityThreshold = visibilityThreshold,
+                    initialScale = 1f,
+                    pressedScale = 1.5f,
+                    onDragStarted = {
+                        didDrag = false
+                    },
+                    onDragStopped = {
+                        if (didDrag) {
+                            currentOnValueChange(targetValue)
+                            didDrag = false
+                        }
+                    },
+                    onDragCancelled = {
+                        didDrag = false
+                        updateValue(currentValue())
+                    },
+                    onDrag = { _, dragAmount ->
+                        if (!didDrag) {
+                            didDrag = dragAmount.x != 0f
+                        }
+                        val delta =
+                            rangeSpan * (dragAmount.x / trackWidth)
+                        currentOnValueChange(
+                            if (isLtr) (targetValue + delta).coerceToSliderRange(valueRange)
+                            else (targetValue - delta).coerceToSliderRange(valueRange)
+                        )
                     }
-                },
-                onDrag = { _, dragAmount ->
-                    if (!didDrag) {
-                        didDrag = dragAmount.x != 0f
-                    }
-                    val delta =
-                        (valueRange.endInclusive - valueRange.start) * (dragAmount.x / trackWidth)
-                    onValueChange(
-                        if (isLtr) (targetValue + delta).coerceIn(valueRange)
-                        else (targetValue - delta).coerceIn(valueRange)
-                    )
-                }
-            )
-        }
+                )
+            }
         LaunchedEffect(dampedDragAnimation) {
-            snapshotFlow { value() }
+            snapshotFlow { currentValue() }
                 .collectLatest { value ->
                     if (dampedDragAnimation.targetValue != value) {
                         dampedDragAnimation.updateValue(value)
@@ -107,16 +121,16 @@ fun LiquidSlider(
                 Modifier
                     .clip(Capsule())
                     .background(trackColor)
-                    .pointerInput(animationScope) {
+                    .pointerInput(valueRange, trackWidth, isLtr) {
                         detectTapGestures { position ->
                             val delta =
-                                (valueRange.endInclusive - valueRange.start) * (position.x / trackWidth)
+                                rangeSpan * (position.x / trackWidth)
                             val targetValue =
-                                (if (isLtr) valueRange.start + delta
-                                else valueRange.endInclusive - delta)
-                                    .coerceIn(valueRange)
+                                (if (isLtr) rangeStart + delta
+                                else rangeEnd - delta)
+                                    .coerceToSliderRange(valueRange)
                             dampedDragAnimation.animateToValue(targetValue)
-                            onValueChange(targetValue)
+                            currentOnValueChange(targetValue)
                         }
                     }
                     .height(6f.dp)
@@ -142,12 +156,17 @@ fun LiquidSlider(
         Box(
             Modifier
                 .graphicsLayer {
-                    translationX =
-                        (-size.width / 2f + trackWidth * dampedDragAnimation.progress)
-                            .fastCoerceIn(
-                                -size.width / 4f,
-                                trackWidth - size.width * 3f / 4f
-                            ) * if (isLtr) 1f else -1f
+                    val minTranslationX = -size.width / 4f
+                    val maxTranslationX = trackWidth - size.width * 3f / 4f
+                    val targetTranslationX =
+                        -size.width / 2f + trackWidth * dampedDragAnimation.progress
+                    val clampedTranslationX =
+                        if (maxTranslationX < minTranslationX) {
+                            minTranslationX
+                        } else {
+                            targetTranslationX.fastCoerceIn(minTranslationX, maxTranslationX)
+                        }
+                    translationX = clampedTranslationX * if (isLtr) 1f else -1f
                 }
                 .then(dampedDragAnimation.modifier)
                 .drawBackdrop(
@@ -208,4 +227,11 @@ fun LiquidSlider(
                 .size(40f.dp, 24f.dp)
         )
     }
+}
+
+private fun Float.coerceToSliderRange(range: ClosedFloatingPointRange<Float>): Float {
+    val start = range.start
+    val end = range.endInclusive
+    if (end < start) return start
+    return coerceIn(range)
 }

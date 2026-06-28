@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -71,6 +72,10 @@ fun LiquidSearchBar(
     adaptiveLuminance: Boolean = true
 ) {
     var pressed by remember { mutableStateOf(false) }
+    LaunchedEffect(enabled) {
+        if (!enabled) pressed = false
+    }
+
     val visuals = rememberLiquidInteractionVisuals(active = pressed)
     val searchHeight by animateDpAsState(
         targetValue = if (pressed) 54.dp else 52.dp,
@@ -84,13 +89,15 @@ fun LiquidSearchBar(
             .liquidAsymmetricPress(visuals)
             .widthIn(min = 220.dp)
             .pointerInput(enabled) {
-                if (!enabled) return@pointerInput
-
                 awaitEachGesture {
+                    if (!enabled) return@awaitEachGesture
                     awaitFirstDown(requireUnconsumed = false)
                     pressed = true
-                    waitForUpOrCancellation()
-                    pressed = false
+                    try {
+                        waitForUpOrCancellation()
+                    } finally {
+                        pressed = false
+                    }
                 }
             },
         layerName = layerName,

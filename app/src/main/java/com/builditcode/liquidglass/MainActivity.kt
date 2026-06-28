@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -40,7 +41,6 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -180,7 +180,10 @@ private fun AnimatedWallpaperBackdrop() {
     val t by infinite.animateFloat(
         initialValue = 0f,
         targetValue = (PI * 2f).toFloat(),
-        animationSpec = infiniteRepeatable(tween(8_000, easing = LinearEasing)),
+        animationSpec = infiniteRepeatable(
+            tween(8_000, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
         label = "wallpaper-phase"
     )
 
@@ -236,71 +239,69 @@ private fun BoxScope.GlassPlaygroundContent() {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceEvenly
     ) {
-        key(cornerRadius) {
-            Box(
-                Modifier
-                    .padding(top = 86.dp)
-                    .statusBarsPadding()
-                    .layeredAdaptiveLuminanceBackdropCapture(
-                        state = adaptiveLuminanceState,
-                        shape = { RoundedRectangle(128.dp * cornerRadius) },
-                        effects = {
-                            val minDimension = size.minDimension
-                            adaptiveLuminanceGlass(
-                                lowLuminanceBlurRadius = (blurRadius * 0.25f).dp.toPx(),
-                                neutralBlurRadius = blurRadius.dp.toPx(),
-                                highLuminanceBlurRadius = (blurRadius * 1.5f).dp.toPx()
-                            )
-                            lens(
-                                refractionHeight = refractionHeight * minDimension * 0.5f,
-                                refractionAmount = refractionAmount * minDimension,
-                                depthEffect = true,
-                                chromaticAberration = chromaticAberration
-                            )
-                        },
-                        highlight = { Highlight.Plain },
-                        layerBlock = {
-                            val offset = offsetAnimation.value
-                            translationX = offset.x
-                            translationY = offset.y
-                            scaleX = zoomAnimation.value
-                            scaleY = zoomAnimation.value
-                            rotationZ = rotationAnimation.value
-                        }
-                    )
-                    .pointerInput(scope) {
-                        fun Offset.rotateBy(angle: Float): Offset {
-                            val radians = angle * (PI / 180)
-                            val cos = cos(radians)
-                            val sin = sin(radians)
-                            return Offset(
-                                x = (x * cos - y * sin).toFloat(),
-                                y = (x * sin + y * cos).toFloat()
-                            )
-                        }
+        Box(
+            Modifier
+                .padding(top = 86.dp)
+                .statusBarsPadding()
+                .layeredAdaptiveLuminanceBackdropCapture(
+                    state = adaptiveLuminanceState,
+                    shape = { RoundedRectangle(128.dp * cornerRadius) },
+                    effects = {
+                        val minDimension = size.minDimension
+                        adaptiveLuminanceGlass(
+                            lowLuminanceBlurRadius = (blurRadius * 0.25f).dp.toPx(),
+                            neutralBlurRadius = blurRadius.dp.toPx(),
+                            highLuminanceBlurRadius = (blurRadius * 1.5f).dp.toPx()
+                        )
+                        lens(
+                            refractionHeight = refractionHeight * minDimension * 0.5f,
+                            refractionAmount = refractionAmount * minDimension,
+                            depthEffect = true,
+                            chromaticAberration = chromaticAberration
+                        )
+                    },
+                    highlight = { Highlight.Plain },
+                    layerBlock = {
+                        val offset = offsetAnimation.value
+                        translationX = offset.x
+                        translationY = offset.y
+                        scaleX = zoomAnimation.value
+                        scaleY = zoomAnimation.value
+                        rotationZ = rotationAnimation.value
+                    }
+                )
+                .pointerInput(scope) {
+                    fun Offset.rotateBy(angle: Float): Offset {
+                        val radians = angle * (PI / 180)
+                        val cos = cos(radians)
+                        val sin = sin(radians)
+                        return Offset(
+                            x = (x * cos - y * sin).toFloat(),
+                            y = (x * sin + y * cos).toFloat()
+                        )
+                    }
 
-                        detectTransformGestures { _, pan, gestureZoom, gestureRotate ->
-                            val targetRotation = rotationAnimation.value + gestureRotate
-                            scope.launch {
-                                offsetAnimation.snapTo(
-                                    offsetAnimation.value + pan.rotateBy(targetRotation) * zoomAnimation.value
-                                )
-                                zoomAnimation.snapTo(zoomAnimation.value * gestureZoom)
-                                rotationAnimation.snapTo(targetRotation)
-                            }
+                    detectTransformGestures { _, pan, gestureZoom, gestureRotate ->
+                        val targetRotation = rotationAnimation.value + gestureRotate
+                        scope.launch {
+                            offsetAnimation.snapTo(
+                                offsetAnimation.value + pan.rotateBy(targetRotation) * zoomAnimation.value
+                            )
+                            zoomAnimation.snapTo(zoomAnimation.value * gestureZoom)
+                            rotationAnimation.snapTo(targetRotation)
                         }
                     }
-                    .size(256.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "luminance\n${"%.2f".format(adaptiveLuminanceState.luminance)}",
-                    color = adaptiveLuminanceState.contentColor.value,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    textAlign = TextAlign.Center
-                )
-            }
+                }
+                .size(256.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "luminance\n${"%.2f".format(adaptiveLuminanceState.luminance)}",
+                color = adaptiveLuminanceState.contentColor.value,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center
+            )
         }
 
         Column(

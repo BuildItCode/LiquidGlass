@@ -9,6 +9,7 @@ import kotlin.math.sign
 private const val NeutralLuminanceBrightness = 0.1f
 private const val HighLuminanceBrightness = 0.5f
 private const val LowLuminanceBrightness = -0.2f
+private const val NeutralLuminanceContrast = 1f
 private const val HighLuminanceContrast = 0f
 private const val DefaultAdaptiveSaturation = 1.3f
 
@@ -18,7 +19,15 @@ fun AdaptiveLuminanceEffectScope.adaptiveLuminanceGlass(
     highLuminanceBlurRadius: Float = 8f.dp.toPx(),
     saturation: Float = DefaultAdaptiveSaturation
 ) {
-    if (!hasLuminanceSample) return
+    if (!hasLuminanceSample) {
+        colorControls(
+            brightness = NeutralLuminanceBrightness,
+            contrast = NeutralLuminanceContrast,
+            saturation = saturation
+        )
+        blur(neutralBlurRadius)
+        return
+    }
 
     applyAdaptiveLuminanceGlass(
         luminance = luminance,

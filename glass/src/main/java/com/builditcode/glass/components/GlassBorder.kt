@@ -68,8 +68,8 @@ fun Modifier.glassBorder(
     val angleToCorner = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
 
     // 2. define "Safe" limits to prevent crashes
-    val halfGap = (gapSize / 2f).coerceIn(0f, 0.4f)
     val soft = softness.coerceIn(0f, 0.1f)
+    val halfGap = (gapSize / 2f).coerceIn(0f, 0.25f - soft)
 
     // 3. Define the Alpha Stops (Transparent -> Color -> Transparent)
     // This creates gaps at 0.0 (Start/Top-Right) and 0.5 (Opposite/Bottom-Left)

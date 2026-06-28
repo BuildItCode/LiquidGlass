@@ -6,16 +6,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.unit.dp
 import com.builditcode.glass.core.BackdropEffectScope
 import org.intellij.lang.annotations.Language
 
 @Composable
 fun rememberSdfShader(@DrawableRes drawableResource: Int): SdfShader {
-    val context = LocalContext.current
-    val imageResource = remember(context, drawableResource) {
-        BitmapFactory.decodeResource(context.resources, drawableResource)
+    val resources = LocalResources.current
+    val imageResource = remember(resources, drawableResource) {
+        BitmapFactory.decodeResource(resources, drawableResource)
             .asImageBitmap()
     }
     return remember(imageResource) { SdfShader(imageResource) }

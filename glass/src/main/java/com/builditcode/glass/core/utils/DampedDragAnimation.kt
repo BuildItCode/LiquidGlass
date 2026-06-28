@@ -26,6 +26,7 @@ class DampedDragAnimation(
     val pressedScale: Float,
     val onDragStarted: DampedDragAnimation.(position: Offset) -> Unit,
     val onDragStopped: DampedDragAnimation.() -> Unit,
+    val onDragCancelled: DampedDragAnimation.() -> Unit = onDragStopped,
     val onDrag: DampedDragAnimation.(size: IntSize, dragAmount: Offset) -> Unit,
 ) {
 
@@ -56,7 +57,12 @@ class DampedDragAnimation(
     private val velocityTracker = VelocityTracker()
 
     val value: Float get() = valueAnimation.value
-    val progress: Float get() = (value - valueRange.start) / (valueRange.endInclusive - valueRange.start)
+    val progress: Float
+        get() {
+            val span = valueRange.endInclusive - valueRange.start
+            if (span <= 0f) return 0f
+            return ((value - valueRange.start) / span).coerceIn(0f, 1f)
+        }
     val targetValue: Float get() = valueAnimation.targetValue
     val pressProgress: Float get() = pressProgressAnimation.value
     val scaleX: Float get() = scaleXAnimation.value
@@ -74,7 +80,7 @@ class DampedDragAnimation(
                 release()
             },
             onDragCancel = {
-                onDragStopped()
+                onDragCancelled()
                 release()
             }
         ) { change, dragAmount ->
@@ -96,9 +102,11 @@ class DampedDragAnimation(
             awaitFrame()
             if (value != targetValue) {
                 val threshold = (valueRange.endInclusive - valueRange.start) * 0.025f
-                snapshotFlow { valueAnimation.value }
-                    .filter { abs(it - valueAnimation.targetValue) < threshold }
-                    .first()
+                if (threshold > 0f) {
+                    snapshotFlow { valueAnimation.value }
+                        .filter { abs(it - valueAnimation.targetValue) < threshold }
+                        .first()
+                }
             }
             launch { pressProgressAnimation.animateTo(0f, pressProgressAnimationSpec) }
             launch { scaleXAnimation.animateTo(initialScale, scaleXAnimationSpec) }
@@ -107,7 +115,7 @@ class DampedDragAnimation(
     }
 
     fun updateValue(value: Float) {
-        val targetValue = value.coerceIn(valueRange)
+        val targetValue = value.coerceInRange()
         animationScope.launch {
             launch {
                 valueAnimation.animateTo(
@@ -122,7 +130,7 @@ class DampedDragAnimation(
         animationScope.launch {
             mutatorMutex.mutate {
                 press()
-                val targetValue = value.coerceIn(valueRange)
+                val targetValue = value.coerceInRange()
                 launch { valueAnimation.animateTo(targetValue, valueAnimationSpec) }
                 if (velocity != 0f) {
                     launch { velocityAnimation.animateTo(0f, velocityAnimationSpec) }
@@ -134,12 +142,22 @@ class DampedDragAnimation(
 
     @OptIn(ExperimentalTime::class)
     private fun updateVelocity() {
+        val span = valueRange.endInclusive - valueRange.start
+        if (span <= 0f) return
+
         velocityTracker.addPosition(
             Clock.System.now().toEpochMilliseconds(),
             Offset(value, 0f)
         )
         val targetVelocity =
-            velocityTracker.calculateVelocity().x / (valueRange.endInclusive - valueRange.start)
+            velocityTracker.calculateVelocity().x / span
         animationScope.launch { velocityAnimation.animateTo(targetVelocity, velocityAnimationSpec) }
+    }
+
+    private fun Float.coerceInRange(): Float {
+        val start = valueRange.start
+        val end = valueRange.endInclusive
+        if (end < start) return start
+        return coerceIn(start, end)
     }
 }
