@@ -251,20 +251,20 @@ internal fun BackdropEffectScope.liquidGlassEffects(
             lowLuminanceBlurRadius = neutralBlurRadius * 0.25f,
             neutralBlurRadius = neutralBlurRadius,
             highLuminanceBlurRadius = neutralBlurRadius * 1.5f,
-            saturation = 1.5f
+            saturation = 1.1f
         )
     } else {
         colorControls(
             brightness = 0.1f,
             contrast = 1f,
-            saturation = 1.5f
+            saturation = 1.1f
         )
         blur(neutralBlurRadius)
     }
     if (minDimension > 0f) {
         lens(
             refractionHeight = minDimension * 0.12f,
-            refractionAmount = minDimension * 0.35f,
+            refractionAmount = minDimension * 0.30f,
             depthEffect = true
         )
     }

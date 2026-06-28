@@ -9,7 +9,6 @@ import androidx.compose.ui.graphics.asComposeRenderEffect
 import com.builditcode.glass.core.RuntimeShader
 import com.builditcode.glass.core.asAndroidRuntimeShader
 
-@RequiresApi(Build.VERSION_CODES.S)
 internal fun RenderEffect?.chain(other: RenderEffect): RenderEffect {
     return if (this != null) {
         android.graphics.RenderEffect.createChainEffect(
@@ -32,7 +31,6 @@ internal fun RuntimeShaderEffect(
     ).asComposeRenderEffect()
 }
 
-@RequiresApi(Build.VERSION_CODES.S)
 internal fun ColorFilterEffect(
     renderEffect: RenderEffect?,
     colorFilter: ColorFilter

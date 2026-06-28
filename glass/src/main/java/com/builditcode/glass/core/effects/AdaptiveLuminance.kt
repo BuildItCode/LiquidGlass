@@ -7,9 +7,9 @@ import kotlin.math.sign
 
 fun AdaptiveLuminanceEffectScope.adaptiveLuminanceGlass(
     lowLuminanceBlurRadius: Float = 2f.dp.toPx(),
-    neutralBlurRadius: Float = 8f.dp.toPx(),
-    highLuminanceBlurRadius: Float = 16f.dp.toPx(),
-    saturation: Float = 1.5f
+    neutralBlurRadius: Float = 6f.dp.toPx(),
+    highLuminanceBlurRadius: Float = 8f.dp.toPx(),
+    saturation: Float = 1.1f
 ) {
     val adjustedLuminance = (luminance * 2f - 1f).let { sign(it) * it * it }
 
