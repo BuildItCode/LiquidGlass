@@ -53,9 +53,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Outline
-import androidx.compose.ui.graphics.drawOutline
-import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -269,19 +266,6 @@ private fun BoxScope.GlassPlaygroundContent() {
                             scaleX = zoomAnimation.value
                             scaleY = zoomAnimation.value
                             rotationZ = rotationAnimation.value
-                        },
-                        onDrawSurface = {
-                            val paneShape = RoundedRectangle(128.dp * cornerRadius)
-                            val outline = paneShape.createOutline(size, layoutDirection, this)
-                            when (outline) {
-                                is Outline.Generic -> {
-                                    clipPath(outline.path) {
-                                        drawRect(Color.White.copy(alpha = 0.18f))
-                                    }
-                                }
-
-                                else -> drawOutline(outline, Color.White.copy(alpha = 0.18f))
-                            }
                         }
                     )
                     .pointerInput(scope) {

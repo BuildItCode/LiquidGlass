@@ -9,6 +9,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
@@ -44,6 +45,9 @@ class AdaptiveLuminanceState internal constructor(
     var luminance by mutableFloatStateOf(initialLuminance)
         internal set
 
+    var hasLuminanceSample by mutableStateOf(false)
+        internal set
+
     val contentColor = Animatable(initialContentColor)
 }
 
@@ -53,6 +57,9 @@ class AdaptiveLuminanceEffectScope internal constructor(
 ) : BackdropEffectScope by delegate {
     val luminance: Float
         get() = adaptiveLuminanceState.luminance
+
+    val hasLuminanceSample: Boolean
+        get() = adaptiveLuminanceState.hasLuminanceSample
 }
 
 private class AdaptiveLuminanceSampleGate {
@@ -126,16 +133,26 @@ fun Modifier.layeredAdaptiveLuminanceBackdropCapture(
             )
 
             if (luminance != null) {
+                val hadValidSample = hasValidSample
+                val sampledContentColor = if (luminance > 0.5f) Color.Black else Color.White
                 hasValidSample = true
-                launch {
-                    state.contentColor.animateTo(
-                        if (luminance > 0.5f) Color.Black else Color.White,
-                        contentColorAnimationSpec
-                    )
-                }
-                launch {
-                    luminanceAnimation.animateTo(luminance, luminanceAnimationSpec) {
-                        state.luminance = value
+
+                if (!hadValidSample) {
+                    luminanceAnimation.snapTo(luminance)
+                    state.contentColor.snapTo(sampledContentColor)
+                    state.luminance = luminance
+                    state.hasLuminanceSample = true
+                } else {
+                    launch {
+                        state.contentColor.animateTo(
+                            sampledContentColor,
+                            contentColorAnimationSpec
+                        )
+                    }
+                    launch {
+                        luminanceAnimation.animateTo(luminance, luminanceAnimationSpec) {
+                            state.luminance = value
+                        }
                     }
                 }
             } else if (!hasValidSample && fastRetryCount < FIRST_SAMPLE_MAX_RETRIES) {
@@ -156,11 +173,13 @@ fun Modifier.layeredAdaptiveLuminanceBackdropCapture(
         layerName = layerName,
         shape = shape,
         effects = {
-            AdaptiveLuminanceEffectScope(this, state).effects()
+            if (state.hasLuminanceSample) {
+                AdaptiveLuminanceEffectScope(this, state).effects()
+            }
         },
-        highlight = highlight,
-        shadow = shadow,
-        innerShadow = innerShadow,
+        highlight = if (state.hasLuminanceSample) highlight else null,
+        shadow = if (state.hasLuminanceSample) shadow else null,
+        innerShadow = if (state.hasLuminanceSample) innerShadow else null,
         layerBlock = layerBlock,
         onDrawBehind = onDrawBehind,
         onDrawBackdrop = { drawBackdrop ->
@@ -170,8 +189,8 @@ fun Modifier.layeredAdaptiveLuminanceBackdropCapture(
                 sampleGate.markRecorded()
             }
         },
-        onDrawSurface = onDrawSurface,
-        onDrawFront = onDrawFront
+        onDrawSurface = if (state.hasLuminanceSample) onDrawSurface else null,
+        onDrawFront = if (state.hasLuminanceSample) onDrawFront else null
     )
 }
 

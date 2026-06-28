@@ -18,6 +18,8 @@ fun AdaptiveLuminanceEffectScope.adaptiveLuminanceGlass(
     highLuminanceBlurRadius: Float = 8f.dp.toPx(),
     saturation: Float = DefaultAdaptiveSaturation
 ) {
+    if (!hasLuminanceSample) return
+
     applyAdaptiveLuminanceGlass(
         luminance = luminance,
         lowLuminanceBlurRadius = lowLuminanceBlurRadius,
