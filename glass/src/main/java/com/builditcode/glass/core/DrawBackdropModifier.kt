@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.neverEqualPolicy
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.Outline
@@ -15,6 +16,7 @@ import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
@@ -28,6 +30,7 @@ import androidx.compose.ui.node.LayoutModifierNode
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.ObserverModifierNode
 import androidx.compose.ui.node.observeReads
+import androidx.compose.ui.node.requireDensity
 import androidx.compose.ui.node.requireGraphicsContext
 import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.unit.Constraints
@@ -42,10 +45,12 @@ import com.builditcode.glass.core.shadow.InnerShadow
 import com.builditcode.glass.core.shadow.InnerShadowElement
 import com.builditcode.glass.core.shadow.Shadow
 import com.builditcode.glass.core.shadow.ShadowElement
+import kotlin.math.ceil
 
 private val DefaultHighlight = { Highlight.Default }
 private val DefaultShadow = { Shadow.Default }
 private val DefaultOnDrawBackdrop: DrawScope.(DrawScope.() -> Unit) -> Unit = { it() }
+private const val BackdropRenderScale = 0.5f
 
 fun Modifier.drawPlainBackdrop(
     backdrop: Backdrop,
@@ -270,17 +275,22 @@ private class DrawBackdropNode(
     private val recordBackdropBlock: (DrawScope.() -> Unit) = {
         val canvas = drawContext.canvas
         val padding = padding
+        val backdropDensity = requireDensity()
 
         if (padding != 0f) {
             canvas.translate(padding, padding)
         }
-        onDrawBackdrop {
-            with(backdrop) {
-                drawBackdrop(
-                    density = effectScope,
-                    coordinates = layoutCoordinates,
-                    layerBlock = layerBlock
-                )
+        withTransform({
+            scale(BackdropRenderScale, BackdropRenderScale, Offset.Zero)
+        }) {
+            onDrawBackdrop {
+                with(backdrop) {
+                    drawBackdrop(
+                        density = backdropDensity,
+                        coordinates = layoutCoordinates,
+                        layerBlock = layerBlock
+                    )
+                }
             }
         }
         if (padding != 0f) {
@@ -296,8 +306,12 @@ private class DrawBackdropNode(
             recordLayer(
                 layer,
                 size = IntSize(
-                    size.width.toInt() + padding.toInt() * 2,
-                    size.height.toInt() + padding.toInt() * 2
+                    ceil(size.width * BackdropRenderScale + padding * 2f)
+                        .toInt()
+                        .coerceAtLeast(1),
+                    ceil(size.height * BackdropRenderScale + padding * 2f)
+                        .toInt()
+                        .coerceAtLeast(1)
                 ),
                 block = recordBackdropBlock
             )
@@ -305,7 +319,11 @@ private class DrawBackdropNode(
             layer.topLeft =
                 if (padding != 0f) IntOffset(-padding.toInt(), -padding.toInt())
                 else IntOffset.Zero
-            drawLayer(layer)
+            withTransform({
+                scale(1f / BackdropRenderScale, 1f / BackdropRenderScale, Offset.Zero)
+            }) {
+                drawLayer(layer)
+            }
         }
     }
 
@@ -320,7 +338,7 @@ private class DrawBackdropNode(
     }
 
     override fun ContentDrawScope.draw() {
-        if (effectScope.update(this)) {
+        if (effectScope.update(this, BackdropRenderScale)) {
             updateEffects()
         }
 
