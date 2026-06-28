@@ -1,4 +1,4 @@
-package com.builditcode.glass
+package com.builditcode.glass.components
 
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState

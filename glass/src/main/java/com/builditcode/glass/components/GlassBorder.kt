@@ -1,4 +1,4 @@
-package com.builditcode.glass
+package com.builditcode.glass.components
 
 import android.content.Context
 import android.graphics.Matrix

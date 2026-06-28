@@ -1,4 +1,4 @@
-package com.builditcode.glass
+package com.builditcode.glass.components
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.EaseOut
@@ -70,8 +70,8 @@ fun LiquidBottomTabs(
         if (isLightTheme) Color(0xFF0088FF)
         else Color(0xFF0091FF)
     val containerColor =
-        if (isLightTheme) Color(0xFFFAFAFA).copy(0.4f)
-        else Color(0xFF121212).copy(0.4f)
+        if (isLightTheme) Color(0xFFFAFAFA).copy(0.3f)
+        else Color(0xFF121212).copy(0.3f)
 
     val tabsBackdrop = rememberLayerBackdrop()
 

@@ -6,17 +6,17 @@ plugins {
 android {
     namespace = "com.builditcode.liquidglass"
     compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
+        version = release(37) {
+            minorApiLevel = 0
         }
     }
 
     defaultConfig {
         applicationId = "com.builditcode.liquidglass"
-        minSdk = 24
-        targetSdk = 36
-        versionCode = 13
-        versionName = "0.4.1"
+        minSdk = 31
+        targetSdk = 37
+        versionCode = 14
+        versionName = "0.6.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

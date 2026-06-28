@@ -4,7 +4,6 @@ import android.graphics.Bitmap
 import androidx.compose.animation.Animatable
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -31,6 +30,8 @@ import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.milliseconds
 import androidx.compose.animation.core.Animatable as FloatAnimatable
 
+private const val FIRST_SAMPLE_RETRY_MILLIS = 16L
+
 @Stable
 class AdaptiveLuminanceState internal constructor(
     initialLuminance: Float,
@@ -52,7 +53,7 @@ class AdaptiveLuminanceEffectScope internal constructor(
 
 @Composable
 fun rememberAdaptiveLuminanceState(
-    initialLuminance: Float = if (isSystemInDarkTheme()) 0f else 1f,
+    initialLuminance: Float = 0.5f,
     initialContentColor: Color = if (initialLuminance > 0.5f) Color.Black else Color.White
 ): AdaptiveLuminanceState =
     remember(initialLuminance, initialContentColor) {
@@ -90,6 +91,7 @@ fun Modifier.layeredAdaptiveLuminanceBackdropCapture(
     ) {
         val buffer = IntArray(normalizedSampleSize * normalizedSampleSize)
         val luminanceAnimation = FloatAnimatable(state.luminance)
+        var hasValidSample = false
 
         while (isActive) {
             val luminance = luminanceLayer.readAverageLuminance(
@@ -98,6 +100,7 @@ fun Modifier.layeredAdaptiveLuminanceBackdropCapture(
             )
 
             if (luminance != null) {
+                hasValidSample = true
                 launch {
                     state.contentColor.animateTo(
                         if (luminance > 0.5f) Color.Black else Color.White,
@@ -109,7 +112,10 @@ fun Modifier.layeredAdaptiveLuminanceBackdropCapture(
                 }
             }
 
-            delay(sampleIntervalMillis.coerceAtLeast(16L).milliseconds)
+            val nextDelayMillis =
+                if (hasValidSample) sampleIntervalMillis
+                else FIRST_SAMPLE_RETRY_MILLIS
+            delay(nextDelayMillis.coerceAtLeast(FIRST_SAMPLE_RETRY_MILLIS).milliseconds)
         }
     }
 
@@ -143,12 +149,18 @@ private suspend fun GraphicsLayer.readAverageLuminance(
     val sample = source.scale(sampleSize, sampleSize)
     sample.readPixels(buffer)
 
-    return buffer.sumOf { argb ->
+    var alphaTotal = 0.0
+    val luminanceTotal = buffer.sumOf { argb ->
+        val a = (argb ushr 24 and 0xFF) / 255.0
         val r = (argb shr 16 and 0xFF) / 255f
         val g = (argb shr 8 and 0xFF) / 255f
         val b = (argb and 0xFF) / 255f
-        0.2126 * r + 0.7152 * g + 0.0722 * b
-    }.toFloat() / buffer.size
+        alphaTotal += a
+        (0.2126 * r + 0.7152 * g + 0.0722 * b) * a
+    }
+    if (alphaTotal <= 0.0) return null
+
+    return (luminanceTotal / alphaTotal).toFloat()
 }
 
 private fun ImageBitmap.scale(width: Int, height: Int): ImageBitmap =

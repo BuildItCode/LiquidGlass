@@ -15,6 +15,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -63,13 +65,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.builditcode.glass.LiquidBottomTab
-import com.builditcode.glass.LiquidBottomTabs
-import com.builditcode.glass.LiquidButton
-import com.builditcode.glass.LiquidCard
-import com.builditcode.glass.LiquidSearchBar
-import com.builditcode.glass.LiquidSlider
-import com.builditcode.glass.LiquidToggle
+import com.builditcode.glass.components.LiquidBottomTab
+import com.builditcode.glass.components.LiquidBottomTabs
+import com.builditcode.glass.components.LiquidButton
+import com.builditcode.glass.components.LiquidCard
+import com.builditcode.glass.components.LiquidSearchBar
+import com.builditcode.glass.components.LiquidSlider
+import com.builditcode.glass.components.LiquidToggle
+import com.builditcode.glass.components.glassBorder
+import com.builditcode.glass.components.rememberGlassBorderGyroscopeRotation
 import com.builditcode.glass.core.effects.adaptiveLuminanceGlass
 import com.builditcode.glass.core.effects.blur
 import com.builditcode.glass.core.effects.lens
@@ -77,12 +81,11 @@ import com.builditcode.glass.core.effects.vibrancy
 import com.builditcode.glass.core.highlight.Highlight
 import com.builditcode.glass.core.layeredAdaptiveLuminanceBackdropCapture
 import com.builditcode.glass.core.layeredBackdropCapture
+import com.builditcode.glass.core.layeredBackdropSource
 import com.builditcode.glass.core.rememberAdaptiveLuminanceState
 import com.builditcode.glass.core.rememberLayeredBackdropOrEmpty
 import com.builditcode.glass.core.shapes.RoundedRectangle
-import com.builditcode.glass.glassBorder
 import com.builditcode.glass.layout.TriLevelLayout
-import com.builditcode.glass.rememberGlassBorderGyroscopeRotation
 import com.builditcode.liquidglass.ui.theme.LiquidGlassTheme
 import kotlinx.coroutines.launch
 import kotlin.math.PI
@@ -371,201 +374,329 @@ private fun ComponentShowcaseContent() {
     var selectedTab by remember { mutableIntStateOf(0) }
     var liked by remember { mutableStateOf(false) }
     var intensity by remember { mutableFloatStateOf(0.62f) }
+    var showGlassSheet by remember { mutableStateOf(false) }
     val backdrop = rememberLayeredBackdropOrEmpty()
     val borderRotation = rememberGlassBorderGyroscopeRotation()
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(
-            top = 112.dp,
-            bottom = 132.dp,
-            start = 20.dp,
-            end = 20.dp
-        ),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+    Box(
+        modifier = Modifier.fillMaxSize()
     ) {
-        item {
-            Text(
-                text = "Component showcase",
-                color = Color.White,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.SemiBold
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = "Buttons, search, cards, and a liquid bottom navigation over a live backdrop.",
-                color = Color.White.copy(alpha = 0.78f),
-                style = MaterialTheme.typography.bodyMedium
-            )
-        }
-
-        item {
-            LiquidSearchBar(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = "Search components",
-                borderRotationDegrees = borderRotation,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .layeredBackdropSource(ComponentShowcaseLayer)
+        ) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(
+                    top = 112.dp,
+                    bottom = 132.dp,
+                    start = 20.dp,
+                    end = 20.dp
+                ),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                LiquidButton(
-                    text = if (liked) "Selected" else "Primary",
-                    onClick = { liked = !liked },
-                    borderRotationDegrees = borderRotation,
-                    modifier = Modifier.weight(1f)
-                )
-                LiquidButton(
-                    text = "Secondary",
-                    onClick = { selectedTab = (selectedTab + 1) % ShowcaseTabs.size },
-                    borderRotationDegrees = borderRotation,
-                    modifier = Modifier.weight(1f)
-                )
-                LiquidToggle(
-                    selected = { liked },
-                    onSelect = { liked = it },
-                    backdrop = backdrop,
-                    modifier = Modifier.align(Alignment.CenterVertically)
-                )
-            }
-        }
-
-        item {
-            LiquidCard(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(26.dp),
-                borderRotationDegrees = borderRotation
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Intensity",
-                            color = Color.White,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = "${(intensity * 100).toInt()}%",
-                            color = Color.White.copy(alpha = 0.72f),
-                            fontSize = 13.sp
-                        )
-                    }
-                    LiquidSlider(
-                        value = { intensity },
-                        onValueChange = { intensity = it },
-                        valueRange = 0f..1f,
-                        visibilityThreshold = 0.001f,
-                        backdrop = backdrop,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
-        }
-
-        item {
-            LiquidCard(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(30.dp),
-                borderRotationDegrees = borderRotation,
-                onClick = { liked = !liked }
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                item {
                     Text(
-                        text = ShowcaseTabs[selectedTab],
+                        text = "Component showcase",
                         color = Color.White,
-                        style = MaterialTheme.typography.titleLarge,
+                        style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.SemiBold
                     )
+                    Spacer(Modifier.height(6.dp))
                     Text(
-                        text = "This card is rendered through the same named-layer capture path used by the controls.",
+                        text = "Buttons, search, cards, and a liquid bottom navigation over a live backdrop.",
                         color = Color.White.copy(alpha = 0.78f),
                         style = MaterialTheme.typography.bodyMedium
                     )
+                }
+
+                item {
                     LiquidButton(
-                        text = "Card action",
-                        onClick = { liked = !liked },
+                        text = if (showGlassSheet) "Glass sheet open" else "Open glass sheet",
+                        onClick = { showGlassSheet = true },
                         borderRotationDegrees = borderRotation,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
-            }
-        }
 
-        item {
-            LiquidCard(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(26.dp),
-                borderRotationDegrees = borderRotation
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Text(
-                            text = "Bottom navigation",
-                            color = Color.White,
-                            fontWeight = FontWeight.SemiBold
+                item {
+                    LiquidSearchBar(
+                        value = query,
+                        onValueChange = { query = it },
+                        placeholder = "Search components",
+                        borderRotationDegrees = borderRotation,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        LiquidButton(
+                            text = if (liked) "Selected" else "Primary",
+                            onClick = { liked = !liked },
+                            borderRotationDegrees = borderRotation,
+                            modifier = Modifier.weight(1f)
                         )
-                        Text(
-                            text = "Tap the bar below",
-                            color = Color.White.copy(alpha = 0.7f),
-                            fontSize = 13.sp
+                        LiquidButton(
+                            text = "Secondary",
+                            onClick = { selectedTab = (selectedTab + 1) % ShowcaseTabs.size },
+                            borderRotationDegrees = borderRotation,
+                            modifier = Modifier.weight(1f)
+                        )
+                        LiquidToggle(
+                            selected = { liked },
+                            onSelect = { liked = it },
+                            backdrop = backdrop,
+                            modifier = Modifier.align(Alignment.CenterVertically)
                         )
                     }
-                    Text(
-                        text = ShowcaseTabs[selectedTab],
-                        color = Color.White,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                }
+
+                item {
+                    LiquidCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(26.dp),
+                        borderRotationDegrees = borderRotation
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Intensity",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "${(intensity * 100).toInt()}%",
+                                    color = Color.White.copy(alpha = 0.72f),
+                                    fontSize = 13.sp
+                                )
+                            }
+                            LiquidSlider(
+                                value = { intensity },
+                                onValueChange = { intensity = it },
+                                valueRange = 0f..1f,
+                                visibilityThreshold = 0.001f,
+                                backdrop = backdrop,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+
+                item {
+                    LiquidCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(30.dp),
+                        borderRotationDegrees = borderRotation,
+                        onClick = { liked = !liked }
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(
+                                text = ShowcaseTabs[selectedTab],
+                                color = Color.White,
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "This card is rendered through the same named-layer capture path used by the controls.",
+                                color = Color.White.copy(alpha = 0.78f),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            LiquidButton(
+                                text = "Card action",
+                                onClick = { liked = !liked },
+                                borderRotationDegrees = borderRotation,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+
+                item {
+                    LiquidCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(26.dp),
+                        borderRotationDegrees = borderRotation
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Bottom navigation",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "Tap the bar below",
+                                    color = Color.White.copy(alpha = 0.7f),
+                                    fontSize = 13.sp
+                                )
+                            }
+                            Text(
+                                text = ShowcaseTabs[selectedTab],
+                                color = Color.White,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 18.dp, vertical = 14.dp),
+                contentAlignment = Alignment.BottomCenter
+            ) {
+                LiquidBottomTabs(
+                    selectedTabIndex = { selectedTab },
+                    onTabSelected = { selectedTab = it },
+                    backdrop = backdrop,
+                    tabsCount = ShowcaseTabs.size,
+                    modifier = Modifier
+                        .navigationBarsPadding()
+                        .fillMaxWidth()
+                        .height(64.dp)
+                ) {
+                    ShowcaseTabs.forEachIndexed { index, label ->
+                        LiquidBottomTab(
+                            onClick = { selectedTab = index }
+                        ) {
+                            Text(
+                                text = label,
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = if (index == selectedTab) FontWeight.SemiBold else FontWeight.Medium,
+                                maxLines = 1
+                            )
+                        }
+                    }
                 }
             }
         }
+
+        if (showGlassSheet) {
+            DraggableGlassSheet(
+                layerName = ComponentShowcaseLayer,
+                onDismiss = { showGlassSheet = false },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 20.dp)
+            )
+        }
     }
+}
+
+@Composable
+private fun DraggableGlassSheet(
+    layerName: String,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val scope = rememberCoroutineScope()
+    val offsetY = remember { Animatable(0f) }
+    val shape = RoundedRectangle(32.dp)
 
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 18.dp, vertical = 14.dp),
-        contentAlignment = Alignment.BottomCenter
-    ) {
-        LiquidBottomTabs(
-            selectedTabIndex = { selectedTab },
-            onTabSelected = { selectedTab = it },
-            backdrop = backdrop,
-            tabsCount = ShowcaseTabs.size,
-            modifier = Modifier
-                .navigationBarsPadding()
-                .fillMaxWidth()
-                .height(64.dp)
-        ) {
-            ShowcaseTabs.forEachIndexed { index, label ->
-                LiquidBottomTab(
-                    onClick = { selectedTab = index }
-                ) {
-                    Text(
-                        text = label,
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = if (index == selectedTab) FontWeight.SemiBold else FontWeight.Medium,
-                        maxLines = 1
-                    )
-                }
+        modifier = modifier
+            .graphicsLayer {
+                translationY = offsetY.value
             }
+            .pointerInput(scope) {
+                detectVerticalDragGestures(
+                    onVerticalDrag = { _, dragAmount ->
+                        scope.launch {
+                            offsetY.snapTo((offsetY.value + dragAmount).coerceAtLeast(0f))
+                        }
+                    },
+                    onDragEnd = {
+                        scope.launch {
+                            if (offsetY.value > 160f) {
+                                offsetY.animateTo(520f, tween(180))
+                                onDismiss()
+                            } else {
+                                offsetY.animateTo(0f, tween(220))
+                            }
+                        }
+                    },
+                    onDragCancel = {
+                        scope.launch {
+                            offsetY.animateTo(0f, tween(220))
+                        }
+                    }
+                )
+            }
+            .fillMaxWidth()
+            .fillMaxHeight(0.7f)
+            .layeredBackdropCapture(
+                layerName = layerName,
+                shape = { shape },
+                effects = {
+                    vibrancy()
+                    blur(12.dp.toPx())
+                    lens(
+                        refractionHeight = 18.dp.toPx(),
+                        refractionAmount = 32.dp.toPx(),
+                        depthEffect = true,
+                        chromaticAberration = true
+                    )
+                },
+                highlight = { Highlight.Plain },
+                onDrawSurface = {
+                    drawRect(Color.White.copy(alpha = 0.16f))
+                }
+            )
+            .glassBorder(shape, Color.White, 1.dp)
+            .padding(22.dp)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(width = 44.dp, height = 4.dp)
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(Color.White.copy(alpha = 0.56f))
+            )
+            Text(
+                text = "Glass over glass",
+                color = Color.White,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = "Controls and bottom tabs below",
+                color = Color.White.copy(alpha = 0.76f),
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center
+            )
+            Spacer(Modifier.height(4.dp))
+            LiquidButton(
+                text = "Close",
+                onClick = onDismiss,
+                layerName = layerName,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 }
 
 private val ShowcaseTabs = listOf("Home", "Explore", "Library", "Profile")
+private const val ComponentShowcaseLayer = "component-showcase"
 
 @Composable
 private fun PlaygroundSlider(

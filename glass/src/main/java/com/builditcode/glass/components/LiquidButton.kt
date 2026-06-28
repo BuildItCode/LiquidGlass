@@ -1,4 +1,4 @@
-package com.builditcode.glass
+package com.builditcode.glass.components
 
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.clickable
