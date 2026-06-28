@@ -26,9 +26,12 @@ import androidx.compose.ui.graphics.rememberGraphicsLayer
 import com.builditcode.glass.core.highlight.Highlight
 import com.builditcode.glass.core.shadow.InnerShadow
 import com.builditcode.glass.core.shadow.Shadow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.math.abs
 import kotlin.time.Duration.Companion.milliseconds
 import androidx.compose.animation.core.Animatable as FloatAnimatable
 
@@ -36,6 +39,7 @@ private const val FIRST_SAMPLE_RETRY_MILLIS = 48L
 private const val FIRST_SAMPLE_MAX_RETRIES = 10
 private const val DEFAULT_SAMPLE_INTERVAL_MILLIS = 1_000L
 private const val DEFAULT_LUMINANCE_ANIMATION_MILLIS = 1_000
+private const val DEFAULT_LUMINANCE_CHANGE_THRESHOLD = 0.025f
 
 @Stable
 class AdaptiveLuminanceState internal constructor(
@@ -65,6 +69,7 @@ class AdaptiveLuminanceEffectScope internal constructor(
 private class AdaptiveLuminanceSampleGate {
     private var requestedGeneration = 1
     private var recordedGeneration = 0
+    private val recordedSignals = Channel<Unit>(Channel.CONFLATED)
 
     val shouldRecord: Boolean
         get() = recordedGeneration < requestedGeneration
@@ -75,7 +80,19 @@ private class AdaptiveLuminanceSampleGate {
 
     fun markRecorded() {
         recordedGeneration = requestedGeneration
+        recordedSignals.trySend(Unit)
     }
+
+    fun clearRecordedSignal() {
+        while (recordedSignals.tryReceive().isSuccess) {
+            // Drain stale wake-ups from samples already consumed by the current read.
+        }
+    }
+
+    suspend fun awaitRecordedSampleOrDelay(delayMillis: Long): Boolean =
+        withTimeoutOrNull(delayMillis.milliseconds) {
+            recordedSignals.receive()
+        } != null
 }
 
 @Composable
@@ -99,6 +116,7 @@ fun Modifier.layeredAdaptiveLuminanceBackdropCapture(
     layerBlock: (GraphicsLayerScope.() -> Unit)? = null,
     sampleSize: Int = 5,
     sampleIntervalMillis: Long = DEFAULT_SAMPLE_INTERVAL_MILLIS,
+    luminanceChangeThreshold: Float = DEFAULT_LUMINANCE_CHANGE_THRESHOLD,
     contentColorAnimationSpec: AnimationSpec<Color> = tween(DEFAULT_LUMINANCE_ANIMATION_MILLIS),
     luminanceAnimationSpec: AnimationSpec<Float> = tween(DEFAULT_LUMINANCE_ANIMATION_MILLIS),
     onDrawBehind: (DrawScope.() -> Unit)? = null,
@@ -115,6 +133,7 @@ fun Modifier.layeredAdaptiveLuminanceBackdropCapture(
         state,
         normalizedSampleSize,
         sampleIntervalMillis,
+        luminanceChangeThreshold,
         contentColorAnimationSpec,
         luminanceAnimationSpec
     ) {
@@ -124,8 +143,21 @@ fun Modifier.layeredAdaptiveLuminanceBackdropCapture(
         var fastRetryCount = 0
 
         while (isActive) {
+            val isFastFirstSampling = !hasValidSample && fastRetryCount < FIRST_SAMPLE_MAX_RETRIES
+            sampleGate.clearRecordedSignal()
             sampleGate.requestSample()
-            withFrameNanos { }
+
+            val recordedSample =
+                if (isFastFirstSampling) {
+                    sampleGate.awaitRecordedSampleOrDelay(FIRST_SAMPLE_RETRY_MILLIS)
+                } else {
+                    withFrameNanos { }
+                    true
+                }
+
+            if (!recordedSample) {
+                continue
+            }
 
             val luminance = luminanceLayer.readAverageLuminance(
                 sampleSize = normalizedSampleSize,
@@ -133,6 +165,7 @@ fun Modifier.layeredAdaptiveLuminanceBackdropCapture(
             )
 
             if (luminance != null) {
+                sampleGate.clearRecordedSignal()
                 val hadValidSample = hasValidSample
                 val sampledContentColor = if (luminance > 0.5f) Color.Black else Color.White
                 hasValidSample = true
@@ -142,6 +175,8 @@ fun Modifier.layeredAdaptiveLuminanceBackdropCapture(
                     state.contentColor.snapTo(sampledContentColor)
                     state.luminance = luminance
                     state.hasLuminanceSample = true
+                } else if (abs(luminance - state.luminance) < luminanceChangeThreshold) {
+                    // Ignore tiny readback drift so glass does not shimmer on stable surfaces.
                 } else {
                     launch {
                         state.contentColor.animateTo(
@@ -159,13 +194,9 @@ fun Modifier.layeredAdaptiveLuminanceBackdropCapture(
                 fastRetryCount++
             }
 
-            val nextDelayMillis =
-                if (!hasValidSample && fastRetryCount < FIRST_SAMPLE_MAX_RETRIES) {
-                    FIRST_SAMPLE_RETRY_MILLIS
-                } else {
-                    sampleIntervalMillis
-                }
-            delay(nextDelayMillis.coerceAtLeast(FIRST_SAMPLE_RETRY_MILLIS).milliseconds)
+            if (hasValidSample || fastRetryCount >= FIRST_SAMPLE_MAX_RETRIES) {
+                delay(sampleIntervalMillis.coerceAtLeast(FIRST_SAMPLE_RETRY_MILLIS).milliseconds)
+            }
         }
     }
 
