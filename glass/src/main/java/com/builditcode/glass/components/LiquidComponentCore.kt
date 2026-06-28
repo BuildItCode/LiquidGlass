@@ -62,6 +62,11 @@ object LiquidComponentDefaults {
         else Color(0xFF121212).copy(alpha = 0.1f)
 
     @Composable
+    fun bottomTabsSelectionColor(): Color =
+        if (!isSystemInDarkTheme()) Color.Black.copy(alpha = 0.1f)
+        else Color.White.copy(alpha = 0.1f)
+
+    @Composable
     fun controlTrackColor(): Color =
         if (!isSystemInDarkTheme()) Color(0xFF787878).copy(alpha = 0.2f)
         else Color(0xFF787880).copy(alpha = 0.36f)

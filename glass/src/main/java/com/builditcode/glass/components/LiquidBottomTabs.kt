@@ -64,6 +64,7 @@ fun LiquidBottomTabs(
     modifier: Modifier = Modifier,
     accentColor: Color = LiquidComponentDefaults.accentColor(),
     containerColor: Color = LiquidComponentDefaults.bottomTabsContainerColor(),
+    selectionColor: Color = LiquidComponentDefaults.bottomTabsSelectionColor(),
     content: @Composable RowScope.() -> Unit
 ) {
     val tabsBackdrop = rememberLayerBackdrop()
@@ -266,11 +267,7 @@ fun LiquidBottomTabs(
                     },
                     onDrawSurface = {
                         val progress = dampedDragAnimation.pressProgress
-                        drawRect(
-                            if (isLightTheme) Color.Black.copy(0.1f)
-                            else Color.White.copy(0.1f),
-                            alpha = 1f - progress
-                        )
+                        drawRect(selectionColor, alpha = 1f - progress)
                         drawRect(Color.Black.copy(alpha = 0.03f * progress))
                     }
                 )
