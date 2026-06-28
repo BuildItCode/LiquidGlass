@@ -1,12 +1,9 @@
-package com.builditcode.glass
+package com.builditcode.glass.layout
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 
-/**
- * Scope allowing you to define layers with tags.
- */
 interface LayerScope {
     fun layer(
         tag: String,
@@ -30,9 +27,6 @@ internal class LayerScopeImpl : LayerScope {
     }
 }
 
-/**
- * A reusable container that progressively wraps layers.
- */
 @Composable
 fun LayeredLayout(
     modifier: Modifier = Modifier,

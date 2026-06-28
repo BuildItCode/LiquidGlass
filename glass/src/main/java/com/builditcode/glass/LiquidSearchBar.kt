@@ -5,6 +5,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -28,9 +29,9 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.builditcode.glass.core.LocalBackdropLayerName
 
 /**
  * A single-line liquid glass search field.
@@ -57,14 +58,14 @@ fun LiquidSearchBar(
     value: String,
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier,
-    layerName: String? = null,
+    layerName: String? = LocalBackdropLayerName.current,
     placeholder: String = "Search",
     enabled: Boolean = true,
     shape: Shape = RoundedCornerShape(24.dp),
     colors: LiquidComponentColors = LiquidComponentColors(),
     blurRadiusIntensity: Float = 5f,
     borderRotationDegrees: Float = 0f,
-    showBorder: Boolean= true,
+    showBorder: Boolean = true,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() }
 ) {
     var pressed by remember { mutableStateOf(false) }
@@ -74,16 +75,6 @@ fun LiquidSearchBar(
         animationSpec = liquidDpSpring(),
         label = "liquid-search-height"
     )
-    val filter = remember(shape, colors.tint, blurRadiusIntensity) {
-        BackdropFilter.Glass(
-            blurRadiusIntensity = blurRadiusIntensity,
-            tint = colors.tint,
-            shape = shape,
-            refraction = 0.3f,
-            edge = 0.24f,
-            dispersion = 0.24f
-        )
-    }
 
     LiquidSurface(
         modifier = modifier
@@ -102,7 +93,12 @@ fun LiquidSearchBar(
             },
         layerName = layerName,
         shape = shape,
-        filter = filter,
+        effects = {
+            liquidGlassEffects(
+                blurRadiusIntensity = blurRadiusIntensity,
+                brightness = visuals.brightness
+            )
+        },
         colors = colors,
         visuals = visuals,
         enabled = enabled,
@@ -132,16 +128,17 @@ fun LiquidSearchBar(
             decorationBox = { innerTextField ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
                 ) {
                     LiquidSearchGlyph(colors.secondaryContent)
-                    Spacer(Modifier.width(10.dp))
+                    Spacer(Modifier.width(6.dp))
                     Box(Modifier.weight(1f)) {
                         if (value.isEmpty()) {
                             Text(
                                 text = placeholder,
                                 color = colors.secondaryContent,
-                                fontSize = 16.sp,
+                                fontSize = 14.sp,
                                 fontWeight = FontWeight.Normal
                             )
                         }
@@ -149,25 +146,6 @@ fun LiquidSearchBar(
                     }
                 }
             }
-        )
-    }
-}
-
-@Preview(
-    name = "LiquidSearchBar",
-    group = "Liquid Components",
-    showBackground = true,
-    backgroundColor = 0xFF101114
-)
-@Composable
-fun LiquidSearchBarPreview() {
-    LiquidPreviewScene {
-        var search by remember { mutableStateOf("") }
-        LiquidSearchBar(
-            value = search,
-            onValueChange = { search = it },
-            placeholder = "Search apps",
-            modifier = Modifier.width(320.dp).height(56.dp)
         )
     }
 }

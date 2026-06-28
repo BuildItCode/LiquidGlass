@@ -4,76 +4,89 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.drawOutline
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil3.compose.AsyncImage
-import coil3.request.ImageRequest
-import coil3.request.allowHardware
-import com.builditcode.glass.BackdropFilter
+import com.builditcode.glass.LiquidBottomTab
+import com.builditcode.glass.LiquidBottomTabs
 import com.builditcode.glass.LiquidButton
 import com.builditcode.glass.LiquidCard
 import com.builditcode.glass.LiquidSearchBar
 import com.builditcode.glass.LiquidSlider
 import com.builditcode.glass.LiquidToggle
-import com.builditcode.glass.TriLevelLayout
-import com.builditcode.glass.TrilevelLayers
+import com.builditcode.glass.core.effects.adaptiveLuminanceGlass
+import com.builditcode.glass.core.effects.blur
+import com.builditcode.glass.core.effects.lens
+import com.builditcode.glass.core.effects.vibrancy
+import com.builditcode.glass.core.highlight.Highlight
+import com.builditcode.glass.core.layeredAdaptiveLuminanceBackdropCapture
+import com.builditcode.glass.core.layeredBackdropCapture
+import com.builditcode.glass.core.rememberAdaptiveLuminanceState
+import com.builditcode.glass.core.rememberLayeredBackdropOrEmpty
+import com.builditcode.glass.core.shapes.RoundedRectangle
 import com.builditcode.glass.glassBorder
-import com.builditcode.glass.layeredBackdropCapture
-import com.builditcode.glass.rememberBackdropManager
+import com.builditcode.glass.layout.TriLevelLayout
 import com.builditcode.glass.rememberGlassBorderGyroscopeRotation
 import com.builditcode.liquidglass.ui.theme.LiquidGlassTheme
+import kotlinx.coroutines.launch
 import kotlin.math.PI
-import kotlin.math.max
-import kotlin.math.roundToInt
+import kotlin.math.cos
 import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
@@ -82,303 +95,316 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             LiquidGlassTheme {
-                VerificationApp()
+                DemoApp()
             }
         }
     }
 }
 
-private enum class VerificationScenario(
-    val tabLabel: String,
-    val title: String,
-    val caption: String
-) {
-    InitialImage(
-        tabLabel = "Image",
-        title = "Initial image capture",
-        caption = "Full-screen hardware image source"
-    ),
-    MovingCard(
-        tabLabel = "Card",
-        title = "Moving glass card",
-        caption = "Scroll the cards over a static source"
-    ),
-    MovingSource(
-        tabLabel = "Source",
-        title = "Static glass card",
-        caption = "Animated image under fixed blur"
-    ),
-    MovingCardAndSource(
-        tabLabel = "Both",
-        title = "Moving glass card",
-        caption = "Scroll while the image moves underneath"
-    ),
-    BottomSheet(
-        tabLabel = "Sheet",
-        title = "Glass bottom sheet",
-        caption = "Open a large overlay glass modal"
-    ),
-    LiquidControls(
-        tabLabel = "Controls",
-        title = "Liquid controls",
-        caption = "Live glass components over animated content"
+private enum class DemoScreen(val label: String) {
+    Playground("Playground"),
+    Components("Components")
+}
+
+@Composable
+private fun DemoApp() {
+    var screen by remember { mutableStateOf(DemoScreen.Playground) }
+
+    DemoPreviewScreen(
+        screen = screen,
+        screenSwitcher = {
+            ScreenSwitcher(
+                selected = screen,
+                onSelected = { screen = it },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 12.dp, start = 16.dp, end = 16.dp)
+            )
+        }
     )
 }
 
 @Composable
-private fun VerificationApp() {
-    var scenario by remember { mutableStateOf(VerificationScenario.InitialImage) }
-    var showBottomSheet by remember { mutableStateOf(false) }
+private fun DemoPreviewScreen(
+    screen: DemoScreen,
+    screenSwitcher: (@Composable BoxScope.() -> Unit)? = null
+) {
+    TriLevelLayout(
+        modifier = Modifier.fillMaxSize(),
+        background = { AnimatedWallpaperBackdrop() },
+        overlay = {
+            Box(Modifier.fillMaxSize()) {
+                when (screen) {
+                    DemoScreen.Playground -> GlassPlaygroundContent()
+                    DemoScreen.Components -> ComponentShowcaseContent()
+                }
 
-    key(scenario) {
-        TriLevelLayout(
-            modifier = Modifier.fillMaxSize(),
-            scaleFactor = 0.5f,
-            debounceMs = 32L,
-            background = {
-                when (scenario) {
-                    VerificationScenario.InitialImage -> HardwareImageBackdrop()
-                    VerificationScenario.MovingCard -> StaticBackdrop()
-                    VerificationScenario.MovingSource -> AnimatedBackdrop()
-                    VerificationScenario.MovingCardAndSource -> AnimatedBackdrop()
-                    VerificationScenario.BottomSheet -> AnimatedBackdrop()
-                    VerificationScenario.LiquidControls -> AnimatedBackdrop()
-                }
-            },
-            foreground = {
-                if (scenario == VerificationScenario.BottomSheet) {
-                    Box(Modifier.fillMaxSize()) {
-                        VerificationGlassCard(
-                            scenario = VerificationScenario.BottomSheet,
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(start = 24.dp, end = 24.dp, bottom = 72.dp),
-                            title = "Foreground glass",
-                            caption = "Captured by the modal above"
-                        )
-                    }
-                }
-            },
-            overlay = {
-                VerificationOverlay(
-                    scenario = scenario,
-                    showBottomSheet = showBottomSheet,
-                    onScenarioChange = {
-                        scenario = it
-                        showBottomSheet = false
-                    },
-                    onBottomSheetOpen = { showBottomSheet = true },
-                    onBottomSheetClose = { showBottomSheet = false }
-                )
+                screenSwitcher?.invoke(this)
             }
-        )
+        }
+    )
+}
+
+@Preview(
+    name = "Glass Playground",
+    group = "LiquidGlass Screens",
+    showBackground = true,
+    backgroundColor = 0xFF101318,
+    showSystemUi = true
+)
+@Composable
+private fun GlassPlaygroundPreview() {
+    LiquidGlassTheme {
+        DemoPreviewScreen(screen = DemoScreen.Playground)
+    }
+}
+
+@Preview(
+    name = "Glass Components",
+    group = "LiquidGlass Screens",
+    showBackground = true,
+    backgroundColor = 0xFF101318,
+    showSystemUi = true
+)
+@Composable
+private fun GlassComponentsPreview() {
+    LiquidGlassTheme {
+        DemoPreviewScreen(screen = DemoScreen.Components)
     }
 }
 
 @Composable
-private fun HardwareImageBackdrop(
-    modifier: Modifier = Modifier
-) {
-    AsyncImage(
-        model = ImageRequest.Builder(LocalContext.current)
-            .data(R.drawable.img_test)
-            .allowHardware(true)
-            .build(),
-        contentDescription = null,
-        contentScale = ContentScale.Crop,
-        modifier = modifier.fillMaxSize()
-    )
-}
-
-@Composable
-private fun StaticBackdrop() {
-    HardwareImageBackdrop()
-}
-
-@Composable
-private fun AnimatedBackdrop() {
-    val infinite = rememberInfiniteTransition(label = "animated-source")
+private fun AnimatedWallpaperBackdrop() {
+    val infinite = rememberInfiniteTransition(label = "wallpaper-motion")
     val t by infinite.animateFloat(
         initialValue = 0f,
-        targetValue = (2f * PI).toFloat(),
-        animationSpec = infiniteRepeatable(tween(7_000, easing = LinearEasing)),
-        label = "animated-source-t"
+        targetValue = (PI * 2f).toFloat(),
+        animationSpec = infiniteRepeatable(tween(8_000, easing = LinearEasing)),
+        label = "wallpaper-phase"
     )
 
     Box(
-        modifier = Modifier
+        Modifier
             .fillMaxSize()
-            .background(Color(0xFF111318))
+            .background(Color(0xFF101318))
     ) {
-        HardwareImageBackdrop(
-            modifier = Modifier.graphicsLayer {
-                scaleX = 1.18f
-                scaleY = 1.18f
-                translationX = 42f * sin(t)
-                translationY = 64f * sin(t * 0.7f)
-            }
+        Image(
+            painter = painterResource(R.drawable.img_test),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = 1.18f
+                    scaleY = 1.18f
+                    translationX = 42f * sin(t)
+                    translationY = 56f * sin(t * 0.72f)
+                }
+        )
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color.Black.copy(alpha = 0.08f),
+                            Color.Black.copy(alpha = 0.28f)
+                        )
+                    )
+                )
         )
     }
 }
 
 @Composable
-private fun VerificationOverlay(
-    scenario: VerificationScenario,
-    showBottomSheet: Boolean,
-    onScenarioChange: (VerificationScenario) -> Unit,
-    onBottomSheetOpen: () -> Unit,
-    onBottomSheetClose: () -> Unit
-) {
-    Box(Modifier.fillMaxSize()) {
-        when (scenario) {
-            VerificationScenario.InitialImage -> InitialImageTestCard()
-            VerificationScenario.MovingCard -> MovingCardTestList(
-                scenario = VerificationScenario.MovingCard,
-                caption = "Background crop should follow this card"
-            )
-            VerificationScenario.MovingSource -> StaticCardOnMovingSource()
-            VerificationScenario.MovingCardAndSource -> MovingCardTestList(
-                scenario = VerificationScenario.MovingCardAndSource,
-                caption = "Moving source and moving region should both update"
-            )
-            VerificationScenario.BottomSheet -> TransparentBottomSheetScenario(
-                showSheet = showBottomSheet,
-                onOpen = onBottomSheetOpen,
-                onClose = onBottomSheetClose
-            )
-            VerificationScenario.LiquidControls -> LiquidControlsScenario()
+private fun BoxScope.GlassPlaygroundContent() {
+    val scope = rememberCoroutineScope()
+    val offsetAnimation = remember { Animatable(Offset.Zero, Offset.VectorConverter) }
+    val zoomAnimation = remember { Animatable(1f) }
+    val rotationAnimation = remember { Animatable(0f) }
+
+    var cornerRadius by remember { mutableFloatStateOf(0.5f) }
+    var blurRadius by remember { mutableFloatStateOf(8f) }
+    var refractionHeight by remember { mutableFloatStateOf(0.2f) }
+    var refractionAmount by remember { mutableFloatStateOf(0.2f) }
+    var chromaticAberration by remember { mutableStateOf(false) }
+    val adaptiveLuminanceState = rememberAdaptiveLuminanceState(initialLuminance = 0.5f)
+
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceEvenly
+    ) {
+        key(cornerRadius) {
+            Box(
+                Modifier
+                    .padding(top = 86.dp)
+                    .statusBarsPadding()
+                    .layeredAdaptiveLuminanceBackdropCapture(
+                        state = adaptiveLuminanceState,
+                        shape = { RoundedRectangle(128.dp * cornerRadius) },
+                        effects = {
+                            val minDimension = size.minDimension
+                            vibrancy()
+                            adaptiveLuminanceGlass(
+                                lowLuminanceBlurRadius = (blurRadius * 0.25f).dp.toPx(),
+                                neutralBlurRadius = blurRadius.dp.toPx(),
+                                highLuminanceBlurRadius = (blurRadius * 1.5f).dp.toPx()
+                            )
+                            lens(
+                                refractionHeight = refractionHeight * minDimension * 0.5f,
+                                refractionAmount = refractionAmount * minDimension,
+                                depthEffect = true,
+                                chromaticAberration = chromaticAberration
+                            )
+                        },
+                        highlight = { Highlight.Plain },
+                        layerBlock = {
+                            val offset = offsetAnimation.value
+                            translationX = offset.x
+                            translationY = offset.y
+                            scaleX = zoomAnimation.value
+                            scaleY = zoomAnimation.value
+                            rotationZ = rotationAnimation.value
+                        },
+                        onDrawSurface = {
+                            val paneShape = RoundedRectangle(128.dp * cornerRadius)
+                            val outline = paneShape.createOutline(size, layoutDirection, this)
+                            when (outline) {
+                                is Outline.Generic -> {
+                                    clipPath(outline.path) {
+                                        drawRect(Color.White.copy(alpha = 0.18f))
+                                    }
+                                }
+
+                                else -> drawOutline(outline, Color.White.copy(alpha = 0.18f))
+                            }
+                        }
+                    )
+                    .pointerInput(scope) {
+                        fun Offset.rotateBy(angle: Float): Offset {
+                            val radians = angle * (PI / 180)
+                            val cos = cos(radians)
+                            val sin = sin(radians)
+                            return Offset(
+                                x = (x * cos - y * sin).toFloat(),
+                                y = (x * sin + y * cos).toFloat()
+                            )
+                        }
+
+                        detectTransformGestures { _, pan, gestureZoom, gestureRotate ->
+                            val targetRotation = rotationAnimation.value + gestureRotate
+                            scope.launch {
+                                offsetAnimation.snapTo(
+                                    offsetAnimation.value + pan.rotateBy(targetRotation) * zoomAnimation.value
+                                )
+                                zoomAnimation.snapTo(zoomAnimation.value * gestureZoom)
+                                rotationAnimation.snapTo(targetRotation)
+                            }
+                        }
+                    }
+                    .size(256.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "luminance\n${"%.2f".format(adaptiveLuminanceState.luminance)}",
+                    color = adaptiveLuminanceState.contentColor.value,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center
+                )
+            }
         }
 
-        ScenarioTabs(
-            selected = scenario,
-            onSelected = onScenarioChange,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .padding(top = 12.dp, start = 12.dp, end = 12.dp)
-        )
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            PlaygroundSlider("Corner radius", cornerRadius, { cornerRadius = it }, 0f..1f)
+            PlaygroundSlider("Blur radius", blurRadius, { blurRadius = it }, 0f..32f)
+            PlaygroundSlider(
+                "Refraction height",
+                refractionHeight,
+                { refractionHeight = it },
+                0f..1f
+            )
+            PlaygroundSlider(
+                "Refraction amount",
+                refractionAmount,
+                { refractionAmount = it },
+                0f..1f
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                LiquidButton(
+                    text = if (chromaticAberration) "Chromatic on" else "Chromatic off",
+                    onClick = { chromaticAberration = !chromaticAberration },
+                    modifier = Modifier.weight(1f)
+                )
+                LiquidButton(
+                    text = "Reset",
+                    onClick = {
+                        scope.launch {
+                            launch { offsetAnimation.animateTo(Offset.Zero) }
+                            launch { zoomAnimation.animateTo(1f) }
+                            launch { rotationAnimation.animateTo(0f) }
+                        }
+                        cornerRadius = 0.5f
+                        blurRadius = 8f
+                        refractionHeight = 0.2f
+                        refractionAmount = 0.2f
+                        chromaticAberration = false
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
     }
 }
 
 @Composable
-private fun BoxScope.TransparentBottomSheetScenario(
-    showSheet: Boolean,
-    onOpen: () -> Unit,
-    onClose: () -> Unit
-) {
-    if (!showSheet) {
-        VerificationGlassCard(
-            scenario = VerificationScenario.BottomSheet,
-            modifier = Modifier
-                .align(Alignment.Center)
-                .padding(horizontal = 24.dp),
-            title = "Open glass sheet",
-            caption = "Tap to validate a large overlay modal"
-        )
-    } else {
-        VerificationBottomSheet(
-            onDismiss = onClose,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(horizontal = 10.dp)
-        )
-    }
-
-    val label = if (showSheet) "Close glass sheet" else "Open glass sheet"
-    val action = if (showSheet) onClose else onOpen
-    Box(
-        modifier = Modifier
-            .align(if (showSheet) Alignment.BottomCenter else Alignment.Center)
-            .padding(bottom = if (showSheet) 454.dp else 0.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .background(Color.Black.copy(alpha = 0.42f))
-            .clickable { action() }
-            .padding(horizontal = 18.dp, vertical = 12.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = label,
-            color = Color.White,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold
-        )
-    }
-}
-
-@Composable
-private fun BoxScope.LiquidControlsScenario() {
+private fun ComponentShowcaseContent() {
     var query by remember { mutableStateOf("") }
-    var enabled by remember { mutableStateOf(true) }
+    var selectedTab by remember { mutableIntStateOf(0) }
+    var liked by remember { mutableStateOf(false) }
     var intensity by remember { mutableFloatStateOf(0.62f) }
-    val gyroBorderRotation = rememberGlassBorderGyroscopeRotation()
+    val backdrop = rememberLayeredBackdropOrEmpty()
+    val borderRotation = rememberGlassBorderGyroscopeRotation()
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            top = 128.dp,
-            bottom = 96.dp,
-            start = 24.dp,
-            end = 24.dp
+        contentPadding = PaddingValues(
+            top = 112.dp,
+            bottom = 132.dp,
+            start = 20.dp,
+            end = 20.dp
         ),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
             Text(
-                text = "Liquid components",
+                text = "Component showcase",
                 color = Color.White,
-                style = MaterialTheme.typography.titleLarge,
+                style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.SemiBold
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "Interact with each control while the image moves behind it.",
+                text = "Buttons, search, cards, and a liquid bottom navigation over a live backdrop.",
                 color = Color.White.copy(alpha = 0.78f),
                 style = MaterialTheme.typography.bodyMedium
             )
         }
 
         item {
-            val shape = RoundedCornerShape(28.dp)
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(86.dp)
-                    .layeredBackdropCapture(
-                        layerName = TrilevelLayers.Background,
-                        filter = BackdropFilter.Glass(
-                            shape = shape,
-                            blurRadiusIntensity = 5f,
-                            refraction = 0.2f,
-                            dispersion = 0.1f,
-                            edge = 0.2f,
-                            tint = Color.White.copy(alpha = 0.08f)
-                        )
-                    )
-                    .glassBorder(
-                        shape = shape,
-                        borderColor = Color.White,
-                        borderWidth = 1.dp,
-                        rotationDegrees = gyroBorderRotation
-                    )
-                    .padding(horizontal = 20.dp),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                Text(
-                    text = "Gyroscope border",
-                    color = Color.White,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-        }
-
-        item {
             LiquidSearchBar(
                 value = query,
                 onValueChange = { query = it },
-                placeholder = "Search apps",
-                layerName = TrilevelLayers.Background,
-                borderRotationDegrees = gyroBorderRotation,
+                placeholder = "Search components",
+                borderRotationDegrees = borderRotation,
                 modifier = Modifier.fillMaxWidth()
             )
         }
@@ -386,351 +412,242 @@ private fun BoxScope.LiquidControlsScenario() {
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalAlignment = Alignment.CenterVertically
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 LiquidButton(
-                    text = if (enabled) "Enabled" else "Disabled",
-                    onClick = { enabled = !enabled },
-                    layerName = TrilevelLayers.Background,
-                    borderRotationDegrees = gyroBorderRotation,
+                    text = if (liked) "Selected" else "Primary",
+                    onClick = { liked = !liked },
+                    borderRotationDegrees = borderRotation,
+                    modifier = Modifier.weight(1f)
+                )
+                LiquidButton(
+                    text = "Secondary",
+                    onClick = { selectedTab = (selectedTab + 1) % ShowcaseTabs.size },
+                    borderRotationDegrees = borderRotation,
                     modifier = Modifier.weight(1f)
                 )
                 LiquidToggle(
-                    checked = enabled,
-                    onCheckedChange = { enabled = it },
-                    layerName = TrilevelLayers.Background,
-                    borderRotationDegrees = gyroBorderRotation
+                    selected = { liked },
+                    onSelect = { liked = it },
+                    backdrop = backdrop,
+                    modifier = Modifier.align(Alignment.CenterVertically)
                 )
             }
         }
 
         item {
-            LiquidSlider(
-                value = intensity,
-                onValueChange = { intensity = it },
-                layerName = TrilevelLayers.Background,
-                borderRotationDegrees = gyroBorderRotation,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-
-        item {
             LiquidCard(
-                layerName = TrilevelLayers.Background,
-                borderRotationDegrees = gyroBorderRotation,
                 modifier = Modifier.fillMaxWidth(),
-                onClick = { enabled = !enabled }
+                shape = RoundedCornerShape(26.dp),
+                borderRotationDegrees = borderRotation
             ) {
-                Column {
-                    Text(
-                        text = "Liquid card",
-                        color = Color.White,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = "A glass content surface using the same capture path as the controls.",
-                        color = Color.White.copy(alpha = 0.78f),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Spacer(Modifier.height(18.dp))
-                    LiquidButton(
-                        text = "Nested action",
-                        onClick = { enabled = !enabled },
-                        layerName = TrilevelLayers.Background,
-                        borderRotationDegrees = gyroBorderRotation,
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Intensity",
+                            color = Color.White,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "${(intensity * 100).toInt()}%",
+                            color = Color.White.copy(alpha = 0.72f),
+                            fontSize = 13.sp
+                        )
+                    }
+                    LiquidSlider(
+                        value = { intensity },
+                        onValueChange = { intensity = it },
+                        valueRange = 0f..1f,
+                        visibilityThreshold = 0.001f,
+                        backdrop = backdrop,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
             }
         }
-    }
-}
 
-@Composable
-private fun ScenarioTabs(
-    selected: VerificationScenario,
-    onSelected: (VerificationScenario) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(22.dp))
-            .background(Color.Black.copy(alpha = 0.34f))
-            .horizontalScroll(rememberScrollState())
-            .padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        VerificationScenario.entries.forEach { scenario ->
-            val isSelected = scenario == selected
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(if (isSelected) Color.White else Color.Transparent)
-                    .clickable { onSelected(scenario) }
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = scenario.tabLabel,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (isSelected) Color.Black else Color.White,
-                    maxLines = 1
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun BoxScope.InitialImageTestCard() {
-    VerificationGlassCard(
-        scenario = VerificationScenario.InitialImage,
-        modifier = Modifier
-            .align(Alignment.Center)
-            .padding(horizontal = 24.dp)
-    )
-}
-
-@Composable
-private fun BoxScope.MovingCardTestList(
-    scenario: VerificationScenario,
-    caption: String
-) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            top = 132.dp,
-            bottom = 132.dp,
-            start = 24.dp,
-            end = 24.dp
-        ),
-        verticalArrangement = Arrangement.spacedBy(36.dp)
-    ) {
-        items((1..12).toList()) { index ->
-            Box(Modifier.fillMaxWidth()) {
-                VerificationGlassCard(
-                    scenario = scenario,
-                    modifier = Modifier
-                        .align(if (index % 2 == 0) Alignment.CenterEnd else Alignment.CenterStart)
-                        .widthIn(max = 280.dp),
-                    title = "Moving card $index",
-                    caption = caption
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun BoxScope.StaticCardOnMovingSource() {
-    VerificationGlassCard(
-        scenario = VerificationScenario.MovingSource,
-        modifier = Modifier
-            .align(Alignment.Center)
-            .padding(horizontal = 24.dp)
-    )
-}
-
-@Composable
-private fun VerificationBottomSheet(
-    onDismiss: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val shape = RoundedCornerShape(topStart = 34.dp, topEnd = 34.dp)
-    val dismissDistance = with(LocalDensity.current) { 120.dp.toPx() }
-    var dragOffset by remember { mutableFloatStateOf(0f) }
-
-    Box(
-        modifier = modifier
-            .offset { IntOffset(0, dragOffset.roundToInt()) }
-            .pointerInput(dismissDistance) {
-                detectVerticalDragGestures(
-                    onVerticalDrag = { _, dragAmount ->
-                        dragOffset = max(0f, dragOffset + dragAmount)
-                    },
-                    onDragEnd = {
-                        if (dragOffset > dismissDistance) {
-                            onDismiss()
-                        } else {
-                            dragOffset = 0f
-                        }
-                    },
-                    onDragCancel = {
-                        dragOffset = 0f
-                    }
-                )
-            }
-            .fillMaxWidth()
-            .fillMaxHeight(0.95f)
-            .layeredBackdropCapture(
-                layerName = TrilevelLayers.Foreground,
-                filter = BackdropFilter.Glass(
-                    shape = shape,
-                    blurRadiusIntensity = 7f,
-                    refraction = 0.24f,
-                    dispersion = 0.14f,
-                    edge = 0.24f,
-                    tint = Color.White.copy(alpha = 0.08f)
-                )
-            )
-            .glassBorder(
-                shape = shape,
-                borderColor = Color.White,
-                borderWidth = 1.dp
-            )
-            .padding(horizontal = 28.dp, vertical = 22.dp)
-    ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Box(
-                modifier = Modifier
-                    .widthIn(min = 44.dp, max = 44.dp)
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(99.dp))
-                    .background(Color.White.copy(alpha = 0.5f))
-            )
-            Spacer(Modifier.height(34.dp))
-            Text(
-                text = "Transparent glass sheet",
-                color = Color.White,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center
-            )
-            Spacer(Modifier.height(10.dp))
-            val searchShape = RoundedCornerShape(22.dp)
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(58.dp)
-                    .padding(horizontal = 8.dp)
-                    .layeredBackdropCapture(
-                        layerName = TrilevelLayers.Foreground,
-                        filter = BackdropFilter.Glass(
-                            shape = searchShape,
-                            blurRadiusIntensity = 7f,
-                            refraction = 0.2f,
-                            dispersion = 0.12f,
-                            edge = 0.22f,
-                            tint = Color.White.copy(alpha = 0.08f)
-                        )
-                    )
-                    .glassBorder(
-                        shape = searchShape,
-                        borderColor = Color.White,
-                        borderWidth = 1.dp
-                    ),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                Text(
-                    text = "Search Applications",
-                    color = Color.White.copy(alpha = 0.82f),
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 20.dp)
-                )
-            }
-            Spacer(Modifier.height(18.dp))
-            Text(
-                text = "Large capture region sampling the animated background",
-                color = Color.White.copy(alpha = 0.82f),
-                style = MaterialTheme.typography.bodyMedium,
-                textAlign = TextAlign.Center
-            )
-            Spacer(Modifier.height(32.dp))
-            Row(
+        item {
+            LiquidCard(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                shape = RoundedCornerShape(30.dp),
+                borderRotationDegrees = borderRotation,
+                onClick = { liked = !liked }
             ) {
-                repeat(3) { index ->
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(82.dp)
-                            .clip(RoundedCornerShape(22.dp))
-                            .background(Color.White.copy(alpha = 0.10f)),
-                        contentAlignment = Alignment.Center
-                    ) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = ShowcaseTabs[selectedTab],
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "This card is rendered through the same named-layer capture path used by the controls.",
+                        color = Color.White.copy(alpha = 0.78f),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    LiquidButton(
+                        text = "Card action",
+                        onClick = { liked = !liked },
+                        borderRotationDegrees = borderRotation,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+
+        item {
+            LiquidCard(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(26.dp),
+                borderRotationDegrees = borderRotation
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
                         Text(
-                            text = "Glass ${index + 1}",
-                            color = Color.White.copy(alpha = 0.9f),
-                            fontSize = 12.sp,
+                            text = "Bottom navigation",
+                            color = Color.White,
                             fontWeight = FontWeight.SemiBold
                         )
+                        Text(
+                            text = "Tap the bar below",
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 13.sp
+                        )
                     }
+                    Text(
+                        text = ShowcaseTabs[selectedTab],
+                        color = Color.White,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 18.dp, vertical = 14.dp),
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        LiquidBottomTabs(
+            selectedTabIndex = { selectedTab },
+            onTabSelected = { selectedTab = it },
+            backdrop = backdrop,
+            tabsCount = ShowcaseTabs.size,
+            modifier = Modifier
+                .navigationBarsPadding()
+                .fillMaxWidth()
+                .height(64.dp)
+        ) {
+            ShowcaseTabs.forEachIndexed { index, label ->
+                LiquidBottomTab(
+                    onClick = { selectedTab = index }
+                ) {
+                    Text(
+                        text = label,
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = if (index == selectedTab) FontWeight.SemiBold else FontWeight.Medium,
+                        maxLines = 1
+                    )
                 }
             }
         }
     }
 }
 
-@Composable
-private fun VerificationGlassCard(
-    scenario: VerificationScenario,
-    modifier: Modifier = Modifier,
-    title: String = scenario.title,
-    caption: String = scenario.caption,
-    width: Dp = 320.dp
-) {
-    val shape = RoundedCornerShape(
-        topStart = 12.dp,
-        topEnd = 12.dp
-    )
+private val ShowcaseTabs = listOf("Home", "Explore", "Library", "Profile")
 
-    Box(
-        modifier = modifier
-            .widthIn(max = width)
-            .height(136.dp)
-            .layeredBackdropCapture(
-                layerName = TrilevelLayers.Background,
-                filter = BackdropFilter.Glass(
-                    shape = shape,
-                    blurRadiusIntensity = 6f,
-                    refraction = 0.2f,
-                    dispersion = 0.12f,
-                    edge = 0.22f,
-                    tint = Color.Transparent
-                )
-            )
-            .glassBorder(
-                shape = shape,
-                borderColor = Color.White,
-                borderWidth = 1.dp
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clip(shape)
-                .background(Color.White.copy(alpha = 0.14f))
-        )
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 22.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+@Composable
+private fun PlaygroundSlider(
+    label: String,
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    valueRange: ClosedFloatingPointRange<Float>
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
+            Text(label, color = Color.White, fontWeight = FontWeight.Medium)
             Text(
-                text = title,
-                color = Color.White,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center
+                text = "%.2f".format(value),
+                color = Color.White.copy(alpha = 0.72f),
+                fontSize = 12.sp
             )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = caption,
-                color = Color.White.copy(alpha = 0.82f),
-                style = MaterialTheme.typography.bodySmall,
-                textAlign = TextAlign.Center
+        }
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            colors = SliderDefaults.colors(
+                thumbColor = Color.White,
+                activeTrackColor = Color.White,
+                inactiveTrackColor = Color.White.copy(alpha = 0.28f)
             )
+        )
+    }
+}
+
+@Composable
+private fun ScreenSwitcher(
+    selected: DemoScreen,
+    onSelected: (DemoScreen) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val shape = RoundedCornerShape(24.dp)
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .widthIn(max = 360.dp)
+            .height(52.dp)
+            .layeredBackdropCapture(
+                shape = { shape },
+                effects = {
+                    vibrancy()
+                    blur(8.dp.toPx())
+                    lens(6.dp.toPx(), 14.dp.toPx())
+                },
+                highlight = { Highlight.Plain },
+                onDrawSurface = {
+                    drawRect(Color.White.copy(alpha = 0.14f))
+                }
+            )
+            .glassBorder(shape, Color.White, 1.dp)
+            .padding(5.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        DemoScreen.entries.forEach { screen ->
+            val isSelected = screen == selected
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(42.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(if (isSelected) Color.White.copy(alpha = 0.24f) else Color.Transparent)
+                    .clickable { onSelected(screen) },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = screen.label,
+                    color = Color.White,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                    fontSize = 13.sp
+                )
+            }
         }
     }
 }

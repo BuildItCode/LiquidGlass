@@ -13,7 +13,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -31,6 +30,11 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import com.builditcode.glass.core.BackdropEffectScope
+import com.builditcode.glass.core.effects.blur
+import com.builditcode.glass.core.effects.colorControls
+import com.builditcode.glass.core.effects.vibrancy
+import com.builditcode.glass.core.layeredBackdropCapture
 
 @Stable
 data class LiquidComponentColors(
@@ -46,7 +50,7 @@ internal fun LiquidSurface(
     modifier: Modifier,
     layerName: String?,
     shape: Shape,
-    filter: BackdropFilter.Glass,
+    effects: BackdropEffectScope.() -> Unit,
     colors: LiquidComponentColors,
     visuals: LiquidInteractionVisuals,
     enabled: Boolean,
@@ -69,8 +73,8 @@ internal fun LiquidSurface(
     surfaceModifier = if (layerName != null) {
         surfaceModifier.layeredBackdropCapture(
             layerName = layerName,
-            shape = liquidShape,
-            filter = filter
+            shape = { liquidShape },
+            effects = effects
         )
     } else {
         surfaceModifier.clip(liquidShape)
@@ -78,7 +82,7 @@ internal fun LiquidSurface(
 
     Box(
         modifier = surfaceModifier.then(
-            if(showBorder) {
+            if (showBorder) {
                 Modifier.glassBorder(
                     shape = liquidShape,
                     borderColor = colors.border.copy(alpha = 0.7f + visuals.pressProgress * 0.24f),
@@ -129,22 +133,16 @@ internal fun LiquidGlassHandle(
     borderRotationDegrees: Float,
     blurRadiusIntensity: Float = 4f
 ) {
-    val filter = remember(shape, colors.tint, blurRadiusIntensity) {
-        BackdropFilter.Glass(
-            blurRadiusIntensity = blurRadiusIntensity,
-            tint = colors.tint,
-            shape = shape
-        )
-    }
-
     var handleModifier = modifier.graphicsLayer {
         alpha = if (enabled) 1f else 0.48f
     }
     handleModifier = if (layerName != null) {
         handleModifier.layeredBackdropCapture(
             layerName = layerName,
-            shape = shape,
-            filter = filter
+            shape = { shape },
+            effects = {
+                liquidGlassEffects(blurRadiusIntensity = blurRadiusIntensity)
+            }
         )
     } else {
         handleModifier.clip(shape)
@@ -178,6 +176,19 @@ internal fun LiquidGlassHandle(
             }
         )
     }
+}
+
+internal fun BackdropEffectScope.liquidGlassEffects(
+    blurRadiusIntensity: Float,
+    brightness: Float = 0f
+) {
+    vibrancy()
+    blur(blurRadiusIntensity.dp.toPx())
+    colorControls(
+        brightness = brightness * 0.18f,
+        contrast = 1.05f,
+        saturation = 1.18f
+    )
 }
 
 @Composable
@@ -264,7 +275,7 @@ internal fun <T> liquidDpSpring() = spring<T>(
 
 @Composable
 internal fun LiquidSearchGlyph(color: Color) {
-    Canvas(Modifier.size(18.dp)) {
+    Canvas(Modifier.size(16.dp)) {
         val stroke = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
         drawCircle(
             color = color,

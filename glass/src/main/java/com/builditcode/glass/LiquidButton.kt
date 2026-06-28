@@ -21,9 +21,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.builditcode.glass.core.LocalBackdropLayerName
 
 /**
  * A liquid glass button with text content.
@@ -48,7 +48,7 @@ fun LiquidButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    layerName: String? = null,
+    layerName: String? = LocalBackdropLayerName.current,
     enabled: Boolean = true,
     shape: Shape = RoundedCornerShape(22.dp),
     colors: LiquidComponentColors = LiquidComponentColors(),
@@ -76,22 +76,6 @@ fun LiquidButton(
     }
 }
 
-@Preview(
-    name = "LiquidButton",
-    group = "Liquid Components",
-    showBackground = true,
-    backgroundColor = 0xFF101114
-)
-@Composable
-fun LiquidButtonPreview() {
-    LiquidPreviewScene {
-        LiquidButton(
-            modifier = Modifier.height(56.dp),
-            text = "Continue",
-            onClick = {}
-        )
-    }
-}
 
 /**
  * A liquid glass button with custom row content.
@@ -115,13 +99,13 @@ fun LiquidButtonPreview() {
 fun LiquidButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    layerName: String? = null,
+    layerName: String? = LocalBackdropLayerName.current,
     enabled: Boolean = true,
     shape: Shape = RoundedCornerShape(22.dp),
     colors: LiquidComponentColors = LiquidComponentColors(),
     blurRadiusIntensity: Float = 4f,
     borderRotationDegrees: Float = 0f,
-    showBorder: Boolean= true,
+    showBorder: Boolean = true,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
     content: @Composable RowScope.() -> Unit
 ) {
@@ -132,13 +116,6 @@ fun LiquidButton(
         animationSpec = liquidDpSpring(),
         label = "liquid-button-height"
     )
-    val filter = remember(shape, colors.tint, blurRadiusIntensity) {
-        BackdropFilter.Glass(
-            blurRadiusIntensity = blurRadiusIntensity,
-            tint = colors.tint,
-            shape = shape
-        )
-    }
 
     LiquidSurface(
         modifier = modifier
@@ -154,7 +131,12 @@ fun LiquidButton(
             ),
         layerName = layerName,
         shape = shape,
-        filter = filter,
+        effects = {
+            liquidGlassEffects(
+                blurRadiusIntensity = blurRadiusIntensity,
+                brightness = visuals.brightness
+            )
+        },
         colors = colors,
         visuals = visuals,
         enabled = enabled,
