@@ -249,7 +249,6 @@ private fun BoxScope.GlassPlaygroundContent() {
                         shape = { RoundedRectangle(128.dp * cornerRadius) },
                         effects = {
                             val minDimension = size.minDimension
-                            vibrancy()
                             adaptiveLuminanceGlass(
                                 lowLuminanceBlurRadius = (blurRadius * 0.25f).dp.toPx(),
                                 neutralBlurRadius = blurRadius.dp.toPx(),

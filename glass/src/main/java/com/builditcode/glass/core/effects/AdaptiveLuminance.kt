@@ -3,28 +3,53 @@ package com.builditcode.glass.core.effects
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
 import com.builditcode.glass.core.AdaptiveLuminanceEffectScope
+import com.builditcode.glass.core.BackdropEffectScope
 import kotlin.math.sign
+
+private const val NeutralLuminanceBrightness = 0.1f
+private const val HighLuminanceBrightness = 0.5f
+private const val LowLuminanceBrightness = -0.2f
+private const val HighLuminanceContrast = 0f
+private const val DefaultAdaptiveSaturation = 1.3f
 
 fun AdaptiveLuminanceEffectScope.adaptiveLuminanceGlass(
     lowLuminanceBlurRadius: Float = 2f.dp.toPx(),
     neutralBlurRadius: Float = 6f.dp.toPx(),
     highLuminanceBlurRadius: Float = 8f.dp.toPx(),
-    saturation: Float = 1.2f
+    saturation: Float = DefaultAdaptiveSaturation
+) {
+    applyAdaptiveLuminanceGlass(
+        luminance = luminance,
+        lowLuminanceBlurRadius = lowLuminanceBlurRadius,
+        neutralBlurRadius = neutralBlurRadius,
+        highLuminanceBlurRadius = highLuminanceBlurRadius,
+        saturation = saturation
+    )
+}
+
+internal fun BackdropEffectScope.applyAdaptiveLuminanceGlass(
+    luminance: Float,
+    lowLuminanceBlurRadius: Float,
+    neutralBlurRadius: Float,
+    highLuminanceBlurRadius: Float,
+    saturation: Float,
+    brightnessOffset: Float = 0f,
+    neutralContrast: Float = 1f
 ) {
     val adjustedLuminance = (luminance * 2f - 1f).let { sign(it) * it * it }
 
     colorControls(
         brightness =
             if (adjustedLuminance > 0f) {
-                lerp(0.1f, 0.5f, adjustedLuminance)
+                lerp(NeutralLuminanceBrightness, HighLuminanceBrightness, adjustedLuminance)
             } else {
-                lerp(0.1f, -0.2f, -adjustedLuminance)
-            },
+                lerp(NeutralLuminanceBrightness, LowLuminanceBrightness, -adjustedLuminance)
+            } + brightnessOffset,
         contrast =
             if (adjustedLuminance > 0f) {
-                lerp(1f, 0f, adjustedLuminance)
+                lerp(neutralContrast, HighLuminanceContrast, adjustedLuminance)
             } else {
-                1f
+                neutralContrast
             },
         saturation = saturation
     )

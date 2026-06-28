@@ -31,15 +31,22 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.util.lerp
 import com.builditcode.glass.core.BackdropEffectScope
+import com.builditcode.glass.core.effects.applyAdaptiveLuminanceGlass
 import com.builditcode.glass.core.effects.blur
 import com.builditcode.glass.core.effects.colorControls
 import com.builditcode.glass.core.effects.lens
-import com.builditcode.glass.core.effects.vibrancy
 import com.builditcode.glass.core.layeredAdaptiveLuminanceBackdropCapture
 import com.builditcode.glass.core.layeredBackdropCapture
-import kotlin.math.sign
+
+private const val LiquidGlassNeutralBrightness = 0.1f
+private const val LiquidGlassNeutralContrast = 1.05f
+private const val LiquidGlassSaturation = 1.3f
+private const val LiquidGlassPressBrightnessMultiplier = 0.18f
+private const val LiquidGlassLowLuminanceBlurMultiplier = 0.25f
+private const val LiquidGlassHighLuminanceBlurMultiplier = 1.5f
+private const val LiquidGlassRefractionHeightFraction = 0.12f
+private const val LiquidGlassRefractionAmountFraction = 0.30f
 
 @Stable
 data class LiquidComponentColors(
@@ -145,8 +152,8 @@ internal fun LiquidSurface(
                 surfaceFill.background(
                     Brush.verticalGradient(
                         listOf(
-                            colors.tint.copy(alpha = 0.10f + visuals.brightness),
-                            colors.tint.copy(alpha = 0.04f + visuals.brightness * 0.42f)
+                            colors.tint.copy(alpha = colors.tint.alpha + visuals.brightness),
+                            colors.tint.copy(alpha = colors.tint.alpha + visuals.brightness * 0.42f)
                         )
                     )
                 )
@@ -243,69 +250,33 @@ internal fun BackdropEffectScope.liquidGlassEffects(
 ) {
     val neutralBlurRadius = blurRadiusIntensity.dp.toPx()
     val minDimension = size.minDimension
+    val pressBrightness = brightness * LiquidGlassPressBrightnessMultiplier
 
-    vibrancy()
     if (adaptiveLuminance && luminance != null) {
-        componentAdaptiveLuminanceGlass(
+        applyAdaptiveLuminanceGlass(
             luminance = luminance,
-            lowLuminanceBlurRadius = neutralBlurRadius * 0.25f,
+            lowLuminanceBlurRadius = neutralBlurRadius * LiquidGlassLowLuminanceBlurMultiplier,
             neutralBlurRadius = neutralBlurRadius,
-            highLuminanceBlurRadius = neutralBlurRadius * 1.5f,
-            saturation = 1.1f
+            highLuminanceBlurRadius = neutralBlurRadius * LiquidGlassHighLuminanceBlurMultiplier,
+            saturation = LiquidGlassSaturation,
+            brightnessOffset = pressBrightness,
+            neutralContrast = LiquidGlassNeutralContrast
         )
     } else {
         colorControls(
-            brightness = 0.1f,
-            contrast = 1f,
-            saturation = 1.1f
+            brightness = LiquidGlassNeutralBrightness + pressBrightness,
+            contrast = LiquidGlassNeutralContrast,
+            saturation = LiquidGlassSaturation
         )
         blur(neutralBlurRadius)
     }
     if (minDimension > 0f) {
         lens(
-            refractionHeight = minDimension * 0.12f,
-            refractionAmount = minDimension * 0.30f,
+            refractionHeight = minDimension * LiquidGlassRefractionHeightFraction,
+            refractionAmount = minDimension * LiquidGlassRefractionAmountFraction,
             depthEffect = true
         )
     }
-    colorControls(
-        brightness = brightness * 0.18f,
-        contrast = 1.05f,
-        saturation = 1.05f
-    )
-}
-
-private fun BackdropEffectScope.componentAdaptiveLuminanceGlass(
-    luminance: Float,
-    lowLuminanceBlurRadius: Float,
-    neutralBlurRadius: Float,
-    highLuminanceBlurRadius: Float,
-    saturation: Float
-) {
-    val adjustedLuminance = (luminance * 2f - 1f).let { sign(it) * it * it }
-
-    colorControls(
-        brightness =
-            if (adjustedLuminance > 0f) {
-                lerp(0.1f, 0.5f, adjustedLuminance)
-            } else {
-                lerp(0.1f, -0.2f, -adjustedLuminance)
-            },
-        contrast =
-            if (adjustedLuminance > 0f) {
-                lerp(1f, 0f, adjustedLuminance)
-            } else {
-                1f
-            },
-        saturation = saturation
-    )
-    blur(
-        if (adjustedLuminance > 0f) {
-            lerp(neutralBlurRadius, highLuminanceBlurRadius, adjustedLuminance)
-        } else {
-            lerp(neutralBlurRadius, lowLuminanceBlurRadius, -adjustedLuminance)
-        }
-    )
 }
 
 @Composable

@@ -10,7 +10,7 @@ kotlin = "2.4.0"
 composeBom = "2026.06.00"
 appcompat = "1.7.1"
 material = "1.14.0"
-glass = "0.6.3"
+glass = "0.6.4"
 coil = "3.5.0"
 
 [libraries]
