@@ -11,6 +11,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.GraphicsLayerScope
@@ -30,7 +31,10 @@ import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.milliseconds
 import androidx.compose.animation.core.Animatable as FloatAnimatable
 
-private const val FIRST_SAMPLE_RETRY_MILLIS = 16L
+private const val FIRST_SAMPLE_RETRY_MILLIS = 100L
+private const val FIRST_SAMPLE_MAX_RETRIES = 10
+private const val DEFAULT_SAMPLE_INTERVAL_MILLIS = 1_000L
+private const val DEFAULT_LUMINANCE_ANIMATION_MILLIS = 1_000
 
 @Stable
 class AdaptiveLuminanceState internal constructor(
@@ -49,6 +53,22 @@ class AdaptiveLuminanceEffectScope internal constructor(
 ) : BackdropEffectScope by delegate {
     val luminance: Float
         get() = adaptiveLuminanceState.luminance
+}
+
+private class AdaptiveLuminanceSampleGate {
+    private var requestedGeneration = 1
+    private var recordedGeneration = 0
+
+    val shouldRecord: Boolean
+        get() = recordedGeneration < requestedGeneration
+
+    fun requestSample() {
+        requestedGeneration++
+    }
+
+    fun markRecorded() {
+        recordedGeneration = requestedGeneration
+    }
 }
 
 @Composable
@@ -71,18 +91,20 @@ fun Modifier.layeredAdaptiveLuminanceBackdropCapture(
     innerShadow: (() -> InnerShadow?)? = null,
     layerBlock: (GraphicsLayerScope.() -> Unit)? = null,
     sampleSize: Int = 5,
-    sampleIntervalMillis: Long = 1_000L,
-    contentColorAnimationSpec: AnimationSpec<Color> = tween(1_000),
-    luminanceAnimationSpec: AnimationSpec<Float> = tween(1_000),
+    sampleIntervalMillis: Long = DEFAULT_SAMPLE_INTERVAL_MILLIS,
+    contentColorAnimationSpec: AnimationSpec<Color> = tween(DEFAULT_LUMINANCE_ANIMATION_MILLIS),
+    luminanceAnimationSpec: AnimationSpec<Float> = tween(DEFAULT_LUMINANCE_ANIMATION_MILLIS),
     onDrawBehind: (DrawScope.() -> Unit)? = null,
     onDrawSurface: (DrawScope.() -> Unit)? = null,
     onDrawFront: (DrawScope.() -> Unit)? = null
 ): Modifier {
     val luminanceLayer = rememberGraphicsLayer()
     val normalizedSampleSize = sampleSize.coerceAtLeast(1)
+    val sampleGate = remember { AdaptiveLuminanceSampleGate() }
 
     LaunchedEffect(
         luminanceLayer,
+        sampleGate,
         state,
         normalizedSampleSize,
         sampleIntervalMillis,
@@ -92,8 +114,12 @@ fun Modifier.layeredAdaptiveLuminanceBackdropCapture(
         val buffer = IntArray(normalizedSampleSize * normalizedSampleSize)
         val luminanceAnimation = FloatAnimatable(state.luminance)
         var hasValidSample = false
+        var fastRetryCount = 0
 
         while (isActive) {
+            sampleGate.requestSample()
+            withFrameNanos { }
+
             val luminance = luminanceLayer.readAverageLuminance(
                 sampleSize = normalizedSampleSize,
                 buffer = buffer
@@ -107,14 +133,21 @@ fun Modifier.layeredAdaptiveLuminanceBackdropCapture(
                         contentColorAnimationSpec
                     )
                 }
-                luminanceAnimation.animateTo(luminance, luminanceAnimationSpec) {
-                    state.luminance = value
+                launch {
+                    luminanceAnimation.animateTo(luminance, luminanceAnimationSpec) {
+                        state.luminance = value
+                    }
                 }
+            } else if (!hasValidSample && fastRetryCount < FIRST_SAMPLE_MAX_RETRIES) {
+                fastRetryCount++
             }
 
             val nextDelayMillis =
-                if (hasValidSample) sampleIntervalMillis
-                else FIRST_SAMPLE_RETRY_MILLIS
+                if (!hasValidSample && fastRetryCount < FIRST_SAMPLE_MAX_RETRIES) {
+                    FIRST_SAMPLE_RETRY_MILLIS
+                } else {
+                    sampleIntervalMillis
+                }
             delay(nextDelayMillis.coerceAtLeast(FIRST_SAMPLE_RETRY_MILLIS).milliseconds)
         }
     }
@@ -132,7 +165,10 @@ fun Modifier.layeredAdaptiveLuminanceBackdropCapture(
         onDrawBehind = onDrawBehind,
         onDrawBackdrop = { drawBackdrop ->
             drawBackdrop()
-            luminanceLayer.record { drawBackdrop() }
+            if (sampleGate.shouldRecord) {
+                luminanceLayer.record { drawBackdrop() }
+                sampleGate.markRecorded()
+            }
         },
         onDrawSurface = onDrawSurface,
         onDrawFront = onDrawFront
