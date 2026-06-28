@@ -159,6 +159,13 @@ LiquidCard { /* content */ }
 LiquidSearchBar(value = query, onValueChange = { query = it })
 ```
 
+Adaptive luminance is on by default for the component glass. Disable it when you want a neutral
+glass profile that keeps the lens and blur but skips luminance sampling:
+
+```kotlin
+LiquidCard(adaptiveLuminance = false) { /* content */ }
+```
+
 For controls ported from the NewGlass implementation, pass the current backdrop explicitly:
 
 ```kotlin
@@ -178,6 +185,9 @@ LiquidSlider(
     backdrop = backdrop
 )
 ```
+
+`LiquidBottomTabs`, `LiquidSlider`, and `LiquidToggle` expose color parameters with the same
+light/dark defaults used by the built-in components.
 
 ---
 

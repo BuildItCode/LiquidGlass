@@ -3,7 +3,6 @@ package com.builditcode.glass.components
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.EaseOut
 import androidx.compose.animation.core.spring
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
@@ -63,16 +62,10 @@ fun LiquidBottomTabs(
     backdrop: Backdrop,
     tabsCount: Int,
     modifier: Modifier = Modifier,
+    accentColor: Color = LiquidComponentDefaults.accentColor(),
+    containerColor: Color = LiquidComponentDefaults.bottomTabsContainerColor(),
     content: @Composable RowScope.() -> Unit
 ) {
-    val isLightTheme = !isSystemInDarkTheme()
-    val accentColor =
-        if (isLightTheme) Color(0xFF0088FF)
-        else Color(0xFF0091FF)
-    val containerColor =
-        if (isLightTheme) Color(0xFFFAFAFA).copy(0.3f)
-        else Color(0xFF121212).copy(0.3f)
-
     val tabsBackdrop = rememberLayerBackdrop()
 
     BoxWithConstraints(

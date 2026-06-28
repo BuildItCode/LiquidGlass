@@ -42,6 +42,7 @@ import com.builditcode.glass.core.LocalBackdropLayerName
  * @param blurRadiusIntensity Blur amount used when [layerName] enables backdrop capture.
  * @param borderRotationDegrees Additional rotation for the border highlight.
  * @param interactionSource Source used to observe pressed state.
+ * @param adaptiveLuminance Whether the glass adapts blur and brightness to sampled luminance.
  */
 @Composable
 fun LiquidButton(
@@ -54,7 +55,8 @@ fun LiquidButton(
     colors: LiquidComponentColors = LiquidComponentColors(),
     blurRadiusIntensity: Float = 4f,
     borderRotationDegrees: Float = 0f,
-    interactionSource: MutableInteractionSource = remember { MutableInteractionSource() }
+    interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
+    adaptiveLuminance: Boolean = true
 ) {
     LiquidButton(
         onClick = onClick,
@@ -64,6 +66,7 @@ fun LiquidButton(
         shape = shape,
         colors = colors,
         blurRadiusIntensity = blurRadiusIntensity,
+        adaptiveLuminance = adaptiveLuminance,
         borderRotationDegrees = borderRotationDegrees,
         interactionSource = interactionSource
     ) {
@@ -93,6 +96,7 @@ fun LiquidButton(
  * @param blurRadiusIntensity Blur amount used when [layerName] enables backdrop capture.
  * @param borderRotationDegrees Additional rotation for the border highlight.
  * @param interactionSource Source used to observe pressed state.
+ * @param adaptiveLuminance Whether the glass adapts blur and brightness to sampled luminance.
  * @param content Custom centered row content.
  */
 @Composable
@@ -107,6 +111,7 @@ fun LiquidButton(
     borderRotationDegrees: Float = 0f,
     showBorder: Boolean = true,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
+    adaptiveLuminance: Boolean = true,
     content: @Composable RowScope.() -> Unit
 ) {
     val pressed by interactionSource.collectIsPressedAsState()
@@ -131,10 +136,13 @@ fun LiquidButton(
             ),
         layerName = layerName,
         shape = shape,
-        effects = {
+        adaptiveLuminance = adaptiveLuminance,
+        effects = { luminance ->
             liquidGlassEffects(
                 blurRadiusIntensity = blurRadiusIntensity,
-                brightness = visuals.brightness
+                brightness = visuals.brightness,
+                adaptiveLuminance = adaptiveLuminance,
+                luminance = luminance
             )
         },
         colors = colors,

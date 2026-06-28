@@ -52,6 +52,7 @@ import com.builditcode.glass.core.LocalBackdropLayerName
  * @param blurRadiusIntensity Blur amount used when [layerName] enables backdrop capture.
  * @param borderRotationDegrees Additional rotation for the border highlight.
  * @param interactionSource Interaction source passed to the inner text field.
+ * @param adaptiveLuminance Whether the glass adapts blur and brightness to sampled luminance.
  */
 @Composable
 fun LiquidSearchBar(
@@ -66,7 +67,8 @@ fun LiquidSearchBar(
     blurRadiusIntensity: Float = 5f,
     borderRotationDegrees: Float = 0f,
     showBorder: Boolean = true,
-    interactionSource: MutableInteractionSource = remember { MutableInteractionSource() }
+    interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
+    adaptiveLuminance: Boolean = true
 ) {
     var pressed by remember { mutableStateOf(false) }
     val visuals = rememberLiquidInteractionVisuals(active = pressed)
@@ -93,10 +95,13 @@ fun LiquidSearchBar(
             },
         layerName = layerName,
         shape = shape,
-        effects = {
+        adaptiveLuminance = adaptiveLuminance,
+        effects = { luminance ->
             liquidGlassEffects(
                 blurRadiusIntensity = blurRadiusIntensity,
-                brightness = visuals.brightness
+                brightness = visuals.brightness,
+                adaptiveLuminance = adaptiveLuminance,
+                luminance = luminance
             )
         },
         colors = colors,

@@ -2,7 +2,6 @@ package com.builditcode.glass.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -52,16 +51,10 @@ fun LiquidSlider(
     valueRange: ClosedFloatingPointRange<Float>,
     visibilityThreshold: Float,
     backdrop: Backdrop,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    accentColor: Color = LiquidComponentDefaults.accentColor(),
+    trackColor: Color = LiquidComponentDefaults.controlTrackColor()
 ) {
-    val isLightTheme = !isSystemInDarkTheme()
-    val accentColor =
-        if (isLightTheme) Color(0xFF0088FF)
-        else Color(0xFF0091FF)
-    val trackColor =
-        if (isLightTheme) Color(0xFF787878).copy(0.2f)
-        else Color(0xFF787880).copy(0.36f)
-
     val trackBackdrop = rememberLayerBackdrop()
 
     BoxWithConstraints(

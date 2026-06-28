@@ -35,6 +35,7 @@ import com.builditcode.glass.core.LocalBackdropLayerName
  * @param blurRadiusIntensity Blur amount used when [layerName] enables backdrop capture.
  * @param borderRotationDegrees Additional rotation for the border highlight.
  * @param interactionSource Source used to observe pressed state when clickable.
+ * @param adaptiveLuminance Whether the glass adapts blur and brightness to sampled luminance.
  * @param content Card content.
  */
 @Composable
@@ -50,6 +51,7 @@ fun LiquidCard(
     borderRotationDegrees: Float = 0f,
     showBorder: Boolean = true,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
+    adaptiveLuminance: Boolean = true,
     content: @Composable BoxScope.() -> Unit
 ) {
     val pressed by interactionSource.collectIsPressedAsState()
@@ -74,10 +76,13 @@ fun LiquidCard(
         modifier = cardModifier,
         layerName = layerName,
         shape = shape,
-        effects = {
+        adaptiveLuminance = adaptiveLuminance,
+        effects = { luminance ->
             liquidGlassEffects(
                 blurRadiusIntensity = blurRadiusIntensity,
-                brightness = visuals.brightness
+                brightness = visuals.brightness,
+                adaptiveLuminance = adaptiveLuminance,
+                luminance = luminance
             )
         },
         colors = colors,

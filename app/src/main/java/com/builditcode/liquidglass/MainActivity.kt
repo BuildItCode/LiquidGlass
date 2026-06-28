@@ -655,7 +655,7 @@ private fun DraggableGlassSheet(
                 },
                 highlight = { Highlight.Plain },
                 onDrawSurface = {
-                    drawRect(Color.White.copy(alpha = 0.16f))
+                    drawRect(Color.White.copy(alpha = 0.1f))
                 }
             )
             .glassBorder(shape, Color.White, 1.dp)

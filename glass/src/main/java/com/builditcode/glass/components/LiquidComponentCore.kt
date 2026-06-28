@@ -5,6 +5,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
@@ -30,11 +31,15 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.util.lerp
 import com.builditcode.glass.core.BackdropEffectScope
 import com.builditcode.glass.core.effects.blur
 import com.builditcode.glass.core.effects.colorControls
+import com.builditcode.glass.core.effects.lens
 import com.builditcode.glass.core.effects.vibrancy
+import com.builditcode.glass.core.layeredAdaptiveLuminanceBackdropCapture
 import com.builditcode.glass.core.layeredBackdropCapture
+import kotlin.math.sign
 
 @Stable
 data class LiquidComponentColors(
@@ -45,12 +50,30 @@ data class LiquidComponentColors(
     val glow: Color = Color(3, 169, 244, 155)
 )
 
+object LiquidComponentDefaults {
+    @Composable
+    fun accentColor(): Color =
+        if (!isSystemInDarkTheme()) Color(0xFF0088FF)
+        else Color(0xFF0091FF)
+
+    @Composable
+    fun bottomTabsContainerColor(): Color =
+        if (!isSystemInDarkTheme()) Color(0xFFFAFAFA).copy(alpha = 0.1f)
+        else Color(0xFF121212).copy(alpha = 0.1f)
+
+    @Composable
+    fun controlTrackColor(): Color =
+        if (!isSystemInDarkTheme()) Color(0xFF787878).copy(alpha = 0.2f)
+        else Color(0xFF787880).copy(alpha = 0.36f)
+}
+
 @Composable
 internal fun LiquidSurface(
     modifier: Modifier,
     layerName: String?,
     shape: Shape,
-    effects: BackdropEffectScope.() -> Unit,
+    adaptiveLuminance: Boolean,
+    effects: BackdropEffectScope.(luminance: Float?) -> Unit,
     colors: LiquidComponentColors,
     visuals: LiquidInteractionVisuals,
     enabled: Boolean,
@@ -71,11 +94,23 @@ internal fun LiquidSurface(
     }
 
     surfaceModifier = if (layerName != null) {
-        surfaceModifier.layeredBackdropCapture(
-            layerName = layerName,
-            shape = { liquidShape },
-            effects = effects
-        )
+        if (adaptiveLuminance) {
+            surfaceModifier.layeredAdaptiveLuminanceBackdropCapture(
+                layerName = layerName,
+                shape = { liquidShape },
+                effects = {
+                    effects(luminance)
+                }
+            )
+        } else {
+            surfaceModifier.layeredBackdropCapture(
+                layerName = layerName,
+                shape = { liquidShape },
+                effects = {
+                    effects(null)
+                }
+            )
+        }
     } else {
         surfaceModifier.clip(liquidShape)
     }
@@ -131,19 +166,36 @@ internal fun LiquidGlassHandle(
     colors: LiquidComponentColors,
     enabled: Boolean,
     borderRotationDegrees: Float,
-    blurRadiusIntensity: Float = 4f
+    blurRadiusIntensity: Float = 4f,
+    adaptiveLuminance: Boolean = true
 ) {
     var handleModifier = modifier.graphicsLayer {
         alpha = if (enabled) 1f else 0.48f
     }
     handleModifier = if (layerName != null) {
-        handleModifier.layeredBackdropCapture(
-            layerName = layerName,
-            shape = { shape },
-            effects = {
-                liquidGlassEffects(blurRadiusIntensity = blurRadiusIntensity)
-            }
-        )
+        if (adaptiveLuminance) {
+            handleModifier.layeredAdaptiveLuminanceBackdropCapture(
+                layerName = layerName,
+                shape = { shape },
+                effects = {
+                    liquidGlassEffects(
+                        blurRadiusIntensity = blurRadiusIntensity,
+                        luminance = luminance
+                    )
+                }
+            )
+        } else {
+            handleModifier.layeredBackdropCapture(
+                layerName = layerName,
+                shape = { shape },
+                effects = {
+                    liquidGlassEffects(
+                        blurRadiusIntensity = blurRadiusIntensity,
+                        adaptiveLuminance = false
+                    )
+                }
+            )
+        }
     } else {
         handleModifier.clip(shape)
     }
@@ -180,14 +232,74 @@ internal fun LiquidGlassHandle(
 
 internal fun BackdropEffectScope.liquidGlassEffects(
     blurRadiusIntensity: Float,
-    brightness: Float = 0f
+    brightness: Float = 0f,
+    adaptiveLuminance: Boolean = true,
+    luminance: Float? = null
 ) {
+    val neutralBlurRadius = blurRadiusIntensity.dp.toPx()
+    val minDimension = size.minDimension
+
     vibrancy()
-    blur(blurRadiusIntensity.dp.toPx())
+    if (adaptiveLuminance && luminance != null) {
+        componentAdaptiveLuminanceGlass(
+            luminance = luminance,
+            lowLuminanceBlurRadius = neutralBlurRadius * 0.25f,
+            neutralBlurRadius = neutralBlurRadius,
+            highLuminanceBlurRadius = neutralBlurRadius * 1.5f,
+            saturation = 1.5f
+        )
+    } else {
+        colorControls(
+            brightness = 0.1f,
+            contrast = 1f,
+            saturation = 1.5f
+        )
+        blur(neutralBlurRadius)
+    }
+    if (minDimension > 0f) {
+        lens(
+            refractionHeight = minDimension * 0.12f,
+            refractionAmount = minDimension * 0.35f,
+            depthEffect = true
+        )
+    }
     colorControls(
         brightness = brightness * 0.18f,
         contrast = 1.05f,
-        saturation = 1.18f
+        saturation = 1.05f
+    )
+}
+
+private fun BackdropEffectScope.componentAdaptiveLuminanceGlass(
+    luminance: Float,
+    lowLuminanceBlurRadius: Float,
+    neutralBlurRadius: Float,
+    highLuminanceBlurRadius: Float,
+    saturation: Float
+) {
+    val adjustedLuminance = (luminance * 2f - 1f).let { sign(it) * it * it }
+
+    colorControls(
+        brightness =
+            if (adjustedLuminance > 0f) {
+                lerp(0.1f, 0.5f, adjustedLuminance)
+            } else {
+                lerp(0.1f, -0.2f, -adjustedLuminance)
+            },
+        contrast =
+            if (adjustedLuminance > 0f) {
+                lerp(1f, 0f, adjustedLuminance)
+            } else {
+                1f
+            },
+        saturation = saturation
+    )
+    blur(
+        if (adjustedLuminance > 0f) {
+            lerp(neutralBlurRadius, highLuminanceBlurRadius, adjustedLuminance)
+        } else {
+            lerp(neutralBlurRadius, lowLuminanceBlurRadius, -adjustedLuminance)
+        }
     )
 }
 
