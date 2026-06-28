@@ -38,7 +38,7 @@ fun BackdropEffectScope.colorControls(
     colorFilter(colorControlsColorFilter(brightness, contrast, saturation))
 }
 
-private val VibrantColorFilter = colorControlsColorFilter(saturation = 1.1f)
+private val VibrantColorFilter = colorControlsColorFilter(saturation = 1.2f)
 
 fun BackdropEffectScope.vibrancy() {
     colorFilter(VibrantColorFilter)
@@ -47,7 +47,7 @@ fun BackdropEffectScope.vibrancy() {
 private fun colorControlsColorFilter(
     brightness: Float = 0f,
     contrast: Float = 1f,
-    saturation: Float = 1f
+    saturation: Float = 1.0f
 ): ColorFilter {
     val invSat = 1f - saturation
     val r = 0.213f * invSat

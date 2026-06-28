@@ -9,7 +9,7 @@ fun AdaptiveLuminanceEffectScope.adaptiveLuminanceGlass(
     lowLuminanceBlurRadius: Float = 2f.dp.toPx(),
     neutralBlurRadius: Float = 6f.dp.toPx(),
     highLuminanceBlurRadius: Float = 8f.dp.toPx(),
-    saturation: Float = 1.1f
+    saturation: Float = 1.2f
 ) {
     val adjustedLuminance = (luminance * 2f - 1f).let { sign(it) * it * it }
 

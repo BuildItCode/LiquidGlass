@@ -272,6 +272,8 @@ private class DrawBackdropNode(
 
     private var padding by mutableFloatStateOf(0f)
 
+    private var hasDrawScope = false
+
     private val recordBackdropBlock: (DrawScope.() -> Unit) = {
         val canvas = drawContext.canvas
         val padding = padding
@@ -339,7 +341,8 @@ private class DrawBackdropNode(
 
     override fun ContentDrawScope.draw() {
         if (effectScope.update(this, BackdropRenderScale)) {
-            updateEffects()
+            hasDrawScope = true
+            observeEffects()
         }
 
         clipToShape {
@@ -415,6 +418,7 @@ private class DrawBackdropNode(
 
     private fun updateEffects() {
         if (!isRenderEffectSupported()) return
+        if (!hasDrawScope) return
 
         effectScope.apply(effects)
         graphicsLayer?.renderEffect = effectScope.renderEffect
@@ -435,6 +439,7 @@ private class DrawBackdropNode(
             graphicsLayer = null
         }
 
+        hasDrawScope = false
         effectScope.reset()
         layoutCoordinates = null
         exportedBackdrop?.layerCoordinates = null

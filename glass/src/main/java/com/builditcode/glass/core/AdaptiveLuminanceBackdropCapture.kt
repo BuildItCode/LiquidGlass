@@ -31,8 +31,8 @@ import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.milliseconds
 import androidx.compose.animation.core.Animatable as FloatAnimatable
 
-private const val FIRST_SAMPLE_RETRY_MILLIS = 100L
-private const val FIRST_SAMPLE_MAX_RETRIES = 10
+private const val FIRST_SAMPLE_RETRY_MILLIS = 48L
+private const val FIRST_SAMPLE_MAX_RETRIES = 5
 private const val DEFAULT_SAMPLE_INTERVAL_MILLIS = 1_000L
 private const val DEFAULT_LUMINANCE_ANIMATION_MILLIS = 1_000
 

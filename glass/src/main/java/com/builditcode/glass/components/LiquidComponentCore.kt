@@ -145,8 +145,8 @@ internal fun LiquidSurface(
                 surfaceFill.background(
                     Brush.verticalGradient(
                         listOf(
-                            Color.White.copy(alpha = 0.10f + visuals.brightness),
-                            Color.White.copy(alpha = 0.04f + visuals.brightness * 0.42f)
+                            colors.tint.copy(alpha = 0.10f + visuals.brightness),
+                            colors.tint.copy(alpha = 0.04f + visuals.brightness * 0.42f)
                         )
                     )
                 )
