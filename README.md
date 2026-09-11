@@ -110,7 +110,7 @@ For multi-layer setups, `TriLevelLayout` wires up a background -> foreground -> 
 | `BackdropFilter.Blur` | Backdrop blur with optional tint and shape-owned clipping. |
 | `BackdropFilter.Glass` | Frosted glass with shape-aware refraction, dispersion, edge rim lighting, and optional tint. |
 
-Liquid controls are included for common surfaces: `LiquidSearchBar`, `LiquidButton`, `LiquidToggle`, `LiquidSlider`, and `LiquidCard`. They use the same backdrop capture pipeline and add spring scale, bounce, shape morphing, and brightness feedback during interaction.
+Liquid controls are included for common surfaces: `LiquidSearchBar`, `LiquidButton`, `LiquidToggle`, `LiquidSlider`, and `LiquidCard`. They use the same backdrop capture pipeline with restrained spring press feedback, stable layout bounds, and visible keyboard focus. Slider thumbs follow touch directly and support RTL, keyboard input, and accessibility adjustments. Switches reserve a 48 dp touch target; buttons and search fields can grow with larger text. Search includes an accessible clear action and an optional `onSearch` callback.
 
 See [`glass/.../Glass.md`](glass/src/main/java/com/builditcode/glass/Glass.md) for the full parameter reference, layer structure, modal patterns, API compatibility, and performance notes.
 
@@ -120,6 +120,20 @@ See [`glass/.../Glass.md`](glass/src/main/java/com/builditcode/glass/Glass.md) f
 
 The `:app` module in this repo is a verification app for the capture paths: initial hardware image capture, a moving glass card over a static source, a static glass card over a moving source, a moving card over a moving source, and a transparent glass bottom sheet. Open it in Android Studio and run on a device or emulator.
 
+Run the regression tests, sample build, and Android lint checks with:
+
+```shell
+./gradlew :glass:testDebugUnitTest :app:testDebugUnitTest :app:assembleDebug :glass:lintDebug :app:lintDebug
+```
+
+Source builds also require Android NDK `27.1.12297006` and CMake `3.22.1` (install through Android Studio's SDK Manager). The AAR includes native blur binaries for arm64-v8a, armeabi-v7a, x86, and x86_64; consuming apps do not need to build C++.
+
+Run `:glass:connectedDebugAndroidTest :app:connectedDebugAndroidTest` on a device to check native pixel parity, concurrent workers, hardware readback threading, and live glass rendering. The JVM blur implementation remains the fallback when the native library cannot load.
+
+On Windows, use `gradlew.bat`. Configure the Android SDK through Android Studio, `ANDROID_HOME`, or the ignored `local.properties` file. The library tests use Robolectric to check CPU blur pixels, scratch-buffer reuse, capture isolation, shader-cache invalidation, and control lifecycle behavior. Shared-source regressions cover 40 consumers, changing background pixels, filter isolation, fractional movement, off-source regions, and consumers disappearing during background preparation. Prepared glass pixels are compared with the previous draw-time processing path. Device testing is still needed to measure frame timing and verify GPU rendering on specific hardware.
+
+Stacked-capture regressions also record a three-source Compose chain into a native hardware canvas, verify background updates through different glass filters, and check bitmap ownership when lower sources disappear or upper captures are cancelled. Native JVM recording checks do not replace device frame-time measurements.
+
 ---
 
 ## Requirements
@@ -128,7 +142,7 @@ The `:app` module in this repo is a verification app for the capture paths: init
 - **Compose BOM:** 2026.02.01+ (tested)
 - **Kotlin:** 2.2+
 - **Best experience:** API 33+ for GPU layer capture, platform blur, and full AGSL glass. API 24-32 uses the legacy bitmap fallback with CPU blur/refraction.
-- **Hardware content:** Compose-rendered hardware bitmaps are supported automatically. API 33+ keeps the capture on the GPU; API 24-32 falls back to a hardware snapshot when software capture cannot render the source.
+- **Hardware content:** Compose-rendered hardware bitmaps are supported automatically. API 33+ keeps the capture on the GPU; API 28-32 renders recorded hardware pictures and reads back their pixels on a worker. API 29-32 reuses its render surface across captures to avoid per-frame renderer setup; unsupported surfaces use the platform picture snapshot fallback. Older versions, or sources that cannot use that path, fall back to a hardware layer snapshot.
 - **Software-only capture:** Pass `disableHardwareAcceleration = true` to `rememberBackdropManager`, `TriLevelLayout`, `QuadLevelLayout`, or `rememberLiquidScaffoldState` to opt out of hardware source capture.
 
 ---

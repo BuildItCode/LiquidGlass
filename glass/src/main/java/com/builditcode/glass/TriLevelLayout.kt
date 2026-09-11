@@ -48,7 +48,7 @@ object QuadLevelLayers {
  * or [TrilevelLayers.Background].
  *
  * @param scaleFactor Internal resolution scale for backdrop rasterization (e.g. 0.5 = 50%).
- * @param debounceMs Minimum interval between full re-captures in milliseconds.
+ * @param debounceMs Minimum interval between CPU/bitmap snapshots in milliseconds. Live GPU captures follow source draws.
  * @param enableHardwareCapture When FALSE, source capture uses the software
  * picture/bitmap path and hardware snapshot promotion is disabled. Ignored when
  * [manager] is supplied.
@@ -124,7 +124,7 @@ fun TriLevelLayout(
  * the component is placed.
  *
  * @param scaleFactor Internal resolution scale for backdrop rasterization (e.g. 0.5 = 50%).
- * @param debounceMs Minimum interval between full re-captures in milliseconds.
+ * @param debounceMs Minimum interval between CPU/bitmap snapshots in milliseconds. Live GPU captures follow source draws.
  * @param enableHardwareCapture When FALSE, source capture uses the software
  * picture/bitmap path and hardware snapshot promotion is disabled. Ignored when
  * [manager] is supplied.

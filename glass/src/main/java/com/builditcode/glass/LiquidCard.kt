@@ -2,6 +2,7 @@ package com.builditcode.glass
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
@@ -16,7 +17,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -28,7 +28,7 @@ import androidx.compose.ui.unit.sp
  * A liquid glass content container.
  *
  * The card can be passive or clickable. When [onClick] is provided it gets the same spring
- * press, shape morph, brightness, and accessibility role behavior as the other liquid
+ * press, brightness, and accessibility role behavior as the other liquid
  * controls. Pass [layerName] to sample a live backdrop layer behind the card.
  *
  * @param modifier Modifier applied to the outer card surface.
@@ -60,7 +60,8 @@ fun LiquidCard(
 ) {
     val pressed by interactionSource.collectIsPressedAsState()
     val interactive = enabled && onClick != null
-    val visuals = rememberLiquidInteractionVisuals(active = pressed && interactive)
+    val focused by interactionSource.collectIsFocusedAsState()
+    val visuals = rememberLiquidInteractionState(pressed && interactive, focused && interactive)
     val filter = remember(shape, colors.tint, blurRadiusIntensity) {
         BackdropFilter.Glass(
             blurRadiusIntensity = blurRadiusIntensity,
@@ -70,8 +71,6 @@ fun LiquidCard(
     }
 
     var cardModifier = modifier
-        .liquidAsymmetricPress(visuals)
-        .clip(shape)
 
     if (onClick != null) {
         cardModifier = cardModifier.clickable(

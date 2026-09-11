@@ -39,10 +39,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -60,6 +62,7 @@ import coil3.request.ImageRequest
 import coil3.request.allowHardware
 import com.builditcode.glass.BackdropFilter
 import com.builditcode.glass.LiquidButton
+import com.builditcode.glass.LiquidComponentColors
 import com.builditcode.glass.LiquidCard
 import com.builditcode.glass.LiquidSearchBar
 import com.builditcode.glass.LiquidSlider
@@ -142,7 +145,12 @@ private fun VerificationApp() {
                     VerificationScenario.MovingSource -> AnimatedBackdrop()
                     VerificationScenario.MovingCardAndSource -> AnimatedBackdrop()
                     VerificationScenario.BottomSheet -> AnimatedBackdrop()
-                    VerificationScenario.LiquidControls -> AnimatedBackdrop()
+                    VerificationScenario.LiquidControls -> Box(Modifier.fillMaxSize()) {
+                        AnimatedBackdrop()
+                        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(
+                            Color.Black.copy(alpha = 0.25f), Color.Black.copy(alpha = 0.48f)
+                        ))))
+                    }
                 }
             },
             foreground = {
@@ -179,11 +187,15 @@ private fun VerificationApp() {
 private fun HardwareImageBackdrop(
     modifier: Modifier = Modifier
 ) {
-    AsyncImage(
-        model = ImageRequest.Builder(LocalContext.current)
+    val context = LocalContext.current
+    val request = remember(context) {
+        ImageRequest.Builder(context)
             .data(R.drawable.img_test)
             .allowHardware(true)
-            .build(),
+            .build()
+    }
+    AsyncImage(
+        model = request,
         contentDescription = null,
         contentScale = ContentScale.Crop,
         modifier = modifier.fillMaxSize()
@@ -308,141 +320,72 @@ private fun BoxScope.TransparentBottomSheetScenario(
 @Composable
 private fun BoxScope.LiquidControlsScenario() {
     var query by remember { mutableStateOf("") }
-    var enabled by remember { mutableStateOf(true) }
+    var focused by remember { mutableStateOf(true) }
     var intensity by remember { mutableFloatStateOf(0.62f) }
-    val gyroBorderRotation = rememberGlassBorderGyroscopeRotation()
-
+    var started by remember { mutableStateOf(false) }
+    val rotation = rememberGlassBorderGyroscopeRotation()
+    val colors = remember(intensity) { LiquidComponentColors(
+        tint = Color.White.copy(alpha = 0.04f + intensity * 0.08f),
+        glow = Color(0xFF9DDDEB).copy(alpha = 0.85f)
+    ) }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            top = 128.dp,
-            bottom = 96.dp,
-            start = 24.dp,
-            end = 24.dp
-        ),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        overscrollEffect = null,
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 24.dp, end = 24.dp, top = 132.dp, bottom = 96.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
         item {
-            Text(
-                text = "Liquid components",
-                color = Color.White,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = "Interact with each control while the image moves behind it.",
-                color = Color.White.copy(alpha = 0.78f),
-                style = MaterialTheme.typography.bodyMedium
-            )
+            Text("LIQUID CONTROLS", color = colors.glow, fontSize = 11.sp, letterSpacing = 1.8.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(10.dp))
+            Text("Make it yours", color = Color.White, fontSize = 30.sp, lineHeight = 36.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(8.dp))
+            Text("Soft light. A lighter touch.", color = colors.secondaryContent, style = MaterialTheme.typography.bodyLarge)
         }
-
         item {
-            val shape = RoundedCornerShape(28.dp)
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(86.dp)
-                    .layeredBackdropCapture(
-                        layerName = TrilevelLayers.Background,
-                        filter = BackdropFilter.Glass(
-                            shape = shape,
-                            blurRadiusIntensity = 5f,
-                            refraction = 0.2f,
-                            dispersion = 0.1f,
-                            edge = 0.2f,
-                            tint = Color.White.copy(alpha = 0.08f)
-                        )
-                    )
-                    .glassBorder(
-                        shape = shape,
-                        borderColor = Color.White,
-                        borderWidth = 1.dp,
-                        rotationDegrees = gyroBorderRotation
-                    )
-                    .padding(horizontal = 20.dp),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                Text(
-                    text = "Gyroscope border",
-                    color = Color.White,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
+            LiquidSearchBar(query, { query = it }, placeholder = "Search your space", colors = colors,
+                layerName = TrilevelLayers.Background, borderRotationDegrees = rotation, modifier = Modifier.fillMaxWidth())
         }
-
         item {
-            LiquidSearchBar(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = "Search apps",
-                layerName = TrilevelLayers.Background,
-                borderRotationDegrees = gyroBorderRotation,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                LiquidButton(
-                    text = if (enabled) "Enabled" else "Disabled",
-                    onClick = { enabled = !enabled },
-                    layerName = TrilevelLayers.Background,
-                    borderRotationDegrees = gyroBorderRotation,
-                    modifier = Modifier.weight(1f)
-                )
-                LiquidToggle(
-                    checked = enabled,
-                    onCheckedChange = { enabled = it },
-                    layerName = TrilevelLayers.Background,
-                    borderRotationDegrees = gyroBorderRotation
-                )
-            }
-        }
-
-        item {
-            LiquidSlider(
-                value = intensity,
-                onValueChange = { intensity = it },
-                layerName = TrilevelLayers.Background,
-                borderRotationDegrees = gyroBorderRotation,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-
-        item {
-            LiquidCard(
-                layerName = TrilevelLayers.Background,
-                borderRotationDegrees = gyroBorderRotation,
-                modifier = Modifier.fillMaxWidth(),
-                onClick = { enabled = !enabled }
-            ) {
+            LiquidCard(layerName = TrilevelLayers.Background, colors = colors,
+                borderRotationDegrees = rotation, modifier = Modifier.fillMaxWidth()) {
                 Column {
-                    Text(
-                        text = "Liquid card",
-                        color = Color.White,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Focus mode", color = colors.content, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.height(4.dp))
+                            Text(if (focused) "A little room to breathe." else "Everything, at your pace.",
+                                color = colors.secondaryContent, style = MaterialTheme.typography.bodySmall)
+                        }
+                        LiquidToggle(focused, { focused = it }, colors = colors,
+                            layerName = TrilevelLayers.Background, borderRotationDegrees = rotation)
+                    }
+                    Spacer(Modifier.height(24.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text("Glow", color = colors.content, style = MaterialTheme.typography.titleSmall)
+                        Text("${(intensity * 100).roundToInt()}%", color = colors.glow, fontSize = 13.sp,
+                            style = androidx.compose.ui.text.TextStyle(fontFeatureSettings = "tnum"))
+                    }
+                    LiquidSlider(intensity, { intensity = it }, colors = colors,
+                        layerName = TrilevelLayers.Background, borderRotationDegrees = rotation, modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(14.dp))
+                    LiquidButton(if (started) "End this moment" else "Start a moment", { started = !started },
+                        colors = colors, layerName = TrilevelLayers.Background, borderRotationDegrees = rotation,
+                        modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(12.dp))
+                    Text(if (started) "Your moment is underway." else "A small pause can make a difference.",
+                        color = colors.secondaryContent, style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                }
+            }
+        }
+        item {
+            LiquidCard(onClick = { focused = !focused }, colors = colors,
+                layerName = TrilevelLayers.Background, borderRotationDegrees = rotation, modifier = Modifier.fillMaxWidth()) {
+                Column {
+                    Text("Feel the response", color = colors.content, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = "A glass content surface using the same capture path as the controls.",
-                        color = Color.White.copy(alpha = 0.78f),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Spacer(Modifier.height(18.dp))
-                    LiquidButton(
-                        text = "Nested action",
-                        onClick = { enabled = !enabled },
-                        layerName = TrilevelLayers.Background,
-                        borderRotationDegrees = gyroBorderRotation,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    Text("Press this card, slide the glow, or switch your focus. Every surface moves with your touch.",
+                        color = colors.secondaryContent, style = MaterialTheme.typography.bodyMedium)
                 }
             }
         }
@@ -501,6 +444,7 @@ private fun BoxScope.MovingCardTestList(
     caption: String
 ) {
     LazyColumn(
+        overscrollEffect = null,
         modifier = Modifier.fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(
             top = 132.dp,
@@ -510,7 +454,7 @@ private fun BoxScope.MovingCardTestList(
         ),
         verticalArrangement = Arrangement.spacedBy(36.dp)
     ) {
-        items((1..12).toList()) { index ->
+        items(12) { index ->
             Box(Modifier.fillMaxWidth()) {
                 VerificationGlassCard(
                     scenario = scenario,
@@ -542,6 +486,7 @@ private fun VerificationBottomSheet(
 ) {
     val shape = RoundedCornerShape(topStart = 34.dp, topEnd = 34.dp)
     val dismissDistance = with(LocalDensity.current) { 120.dp.toPx() }
+    val currentOnDismiss by rememberUpdatedState(onDismiss)
     var dragOffset by remember { mutableFloatStateOf(0f) }
 
     Box(
@@ -554,7 +499,7 @@ private fun VerificationBottomSheet(
                     },
                     onDragEnd = {
                         if (dragOffset > dismissDistance) {
-                            onDismiss()
+                            currentOnDismiss()
                         } else {
                             dragOffset = 0f
                         }
@@ -570,11 +515,7 @@ private fun VerificationBottomSheet(
                 layerName = TrilevelLayers.Foreground,
                 filter = BackdropFilter.Glass(
                     shape = shape,
-                    blurRadiusIntensity = 7f,
-                    refraction = 0.24f,
-                    dispersion = 0.14f,
-                    edge = 0.24f,
-                    tint = Color.White.copy(alpha = 0.08f)
+                    blurRadiusIntensity = 3f
                 )
             )
             .glassBorder(
@@ -614,11 +555,7 @@ private fun VerificationBottomSheet(
                         layerName = TrilevelLayers.Foreground,
                         filter = BackdropFilter.Glass(
                             shape = searchShape,
-                            blurRadiusIntensity = 7f,
-                            refraction = 0.2f,
-                            dispersion = 0.12f,
-                            edge = 0.22f,
-                            tint = Color.White.copy(alpha = 0.08f)
+                            blurRadiusIntensity = 3f,
                         )
                     )
                     .glassBorder(
@@ -690,11 +627,7 @@ private fun VerificationGlassCard(
                 layerName = TrilevelLayers.Background,
                 filter = BackdropFilter.Glass(
                     shape = shape,
-                    blurRadiusIntensity = 6f,
-                    refraction = 0.2f,
-                    dispersion = 0.12f,
-                    edge = 0.22f,
-                    tint = Color.Transparent
+                    blurRadiusIntensity = 3f
                 )
             )
             .glassBorder(

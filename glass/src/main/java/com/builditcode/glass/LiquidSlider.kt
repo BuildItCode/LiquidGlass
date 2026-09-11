@@ -1,40 +1,42 @@
 package com.builditcode.glass
 
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.drag
+import androidx.compose.foundation.interaction.DragInteraction
+import androidx.compose.foundation.interaction.Interaction
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.progressSemantics
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.util.lerp
 import kotlin.math.roundToInt
 
 /**
@@ -51,12 +53,14 @@ import kotlin.math.roundToInt
  * @param valueRange Allowed value range.
  * @param enabled Whether dragging and interaction feedback are enabled.
  * @param steps Number of discrete steps between the ends of [valueRange].
- * @param onValueChangeFinished Called when a drag gesture ends.
+ * @param onValueChangeFinished Called after a completed drag, tap, or keyboard/accessibility edit.
+ * Canceled gestures do not invoke this callback.
  * @param colors Colors used for track, handle tint, border, and glow.
  * @param blurRadiusIntensity Blur amount used by the glass handle when [layerName] is set.
- * @param borderRotationDegrees Additional rotation for the track and handle border highlights.
+ * @param borderRotationDegrees Additional rotation for the glass handle border highlight.
  * @param height Total touch and layout height for the slider.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LiquidSlider(
     value: Float,
@@ -72,163 +76,121 @@ fun LiquidSlider(
     borderRotationDegrees: Float = 0f,
     height: Dp = 52.dp
 ) {
-    var widthPx by remember { mutableIntStateOf(0) }
-    var dragging by remember { mutableStateOf(false) }
-    var lastReportedValue by remember(value) { mutableFloatStateOf(value) }
-    val coercedValue = value.coerceIn(valueRange.start, valueRange.endInclusive)
-    val fraction = valueRange.fractionFor(coercedValue)
-    val animatedFraction by animateFloatAsState(
-        targetValue = fraction,
-        animationSpec = liquidSpring(),
-        label = "liquid-slider-fraction"
-    )
-    val thumbWidth by animateDpAsState(
-        targetValue = if (dragging) 58.dp else 42.dp,
-        animationSpec = liquidDpSpring(),
-        label = "liquid-slider-thumb-width"
-    )
-    val thumbHeight by animateDpAsState(
-        targetValue = if (dragging) 32.dp else 28.dp,
-        animationSpec = liquidDpSpring(),
-        label = "liquid-slider-thumb-height"
-    )
-    val visuals = rememberLiquidInteractionVisuals(active = dragging)
-    val thumbShape = LiquidMorphShape(
-        baseShape = RoundedCornerShape(16.dp),
-        progress = visuals.shapeMorph
-    )
-    val thumbWidthPx = with(LocalDensity.current) { thumbWidth.roundToPx() }
+    val state = remember(steps, valueRange) { SliderState(value, steps, valueRange = valueRange) }
+    // Keep collectors attached while disabling or replacing the range so they receive
+    // the terminal Cancel interaction and can clear the thumb's pressed appearance.
+    val interactions = remember { LiquidSliderInteractionSource() }
+    state.value = value
+    state.onValueChange = { if (enabled) onValueChange(it) }
+    state.onValueChangeFinished = {
+        // Foundation invokes onDragStopped for both completion and cancellation. Inspect
+        // its synchronous interaction emission before forwarding Material's callback.
+        val canceled = interactions.consumeDragCancellation()
+        if (enabled && !canceled) onValueChangeFinished?.invoke()
+    }
+    val pressed by interactions.collectIsPressedAsState()
+    val dragging by interactions.collectIsDraggedAsState()
+    val focused by interactions.collectIsFocusedAsState()
+    val visuals = rememberLiquidInteractionState(enabled && (pressed || dragging), enabled && focused)
+    val thumbShape = RoundedCornerShape(50)
 
-    Box(
-        modifier = modifier
-            .widthIn(min = 160.dp)
-            .height(height)
-            .alpha(if (enabled) 1f else 0.48f)
-            .progressSemantics(coercedValue, valueRange, steps)
-            .onSizeChanged { widthPx = it.width }
-            .pointerInput(enabled, valueRange.start, valueRange.endInclusive, steps, widthPx) {
-                if (!enabled || widthPx == 0) return@pointerInput
-
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    dragging = true
-
-                    fun updateValueFromX(x: Float) {
-                        val nextValue = valueRange.valueFor(
-                            x = x,
-                            widthPx = widthPx,
-                            thumbSizePx = thumbWidth.toPx(),
-                            steps = steps
-                        )
-                        if (nextValue != lastReportedValue) {
-                            lastReportedValue = nextValue
-                            onValueChange(nextValue)
-                        }
-                    }
-
-                    updateValueFromX(down.position.x)
-                    drag(down.id) { change ->
-                        updateValueFromX(change.position.x)
-                        change.consume()
-                    }
-
+    // Foundation handles horizontal touch slop, RTL, keyboard and accessibility actions.
+    // Position follows the value directly; only the thumb's optical press response springs.
+    Slider(
+        state = state,
+        enabled = enabled,
+        interactionSource = interactions,
+        modifier = modifier.widthIn(min = 160.dp).heightIn(min = height.coerceAtLeast(48.dp))
+            .graphicsLayer { alpha = if (enabled) 1f else 0.48f }
+            .semantics {
+                // Resolve the step before testing equality. Material's action accepts
+                // disabled edits and fails to snap negative targets before reporting them.
+                setProgress { target ->
+                    if (!enabled || target.isNaN()) return@setProgress false
+                    val resolved = snapLiquidSliderValue(target, valueRange, steps)
+                    if (resolved == state.value) return@setProgress false
+                    onValueChange(resolved)
                     onValueChangeFinished?.invoke()
-                    dragging = false
+                    true
                 }
             },
-        contentAlignment = Alignment.CenterStart
-    ) {
-        LiquidSliderTrack(
-            fraction = animatedFraction,
-            colors = colors,
-            borderRotationDegrees = borderRotationDegrees
-        )
-
-        LiquidGlassHandle(
-            modifier = Modifier
-                .sliderThumbOffset(
-                    widthPx = widthPx,
-                    fraction = animatedFraction,
-                    thumbSizePx = thumbWidthPx
-                )
-                .size(width = thumbWidth, height = thumbHeight),
-            layerName = layerName,
-            shape = thumbShape,
-            colors = colors,
-            enabled = enabled,
-            blurRadiusIntensity = blurRadiusIntensity,
-            borderRotationDegrees = borderRotationDegrees
-        )
-    }
-}
-
-@Composable
-private fun LiquidSliderTrack(
-    fraction: Float,
-    colors: LiquidComponentColors,
-    borderRotationDegrees: Float
-) {
-    val shape = RoundedCornerShape(7.dp)
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(14.dp)
-            .clip(shape)
-            .background(colors.tint.copy(alpha = 0.1f))
-            .glassBorder(
-                shape = shape,
-                borderColor = colors.border.copy(alpha = 0.36f),
-                borderWidth = 1.dp,
-                gapSize = 0.01f,
-                softness = 0.02f,
-                rotationDegrees = borderRotationDegrees
-            ),
-        contentAlignment = Alignment.CenterStart
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(fraction.coerceIn(0f, 1f))
-                .fillMaxHeight()
-                .clip(shape)
-                .background(colors.glow.copy(alpha = 0.42f))
-        )
-    }
-}
-
-private fun Modifier.sliderThumbOffset(
-    widthPx: Int,
-    fraction: Float,
-    thumbSizePx: Int
-): Modifier = offset {
-    val travelPx = (widthPx - thumbSizePx).coerceAtLeast(0)
-    IntOffset(
-        x = (travelPx * fraction.coerceIn(0f, 1f)).roundToInt(),
-        y = 0
+        thumb = {
+            LiquidGlassHandle(
+                modifier = Modifier.size(42.dp, 28.dp).graphicsLayer {
+                    val progress = visuals.press.value.coerceIn(0f, 1f)
+                    scaleX = 1f + progress * 0.12f
+                    scaleY = 1f + progress * 0.10f
+                },
+                layerName = layerName,
+                shape = thumbShape,
+                colors = colors,
+                enabled = true,
+                visuals = visuals,
+                blurRadiusIntensity = blurRadiusIntensity,
+                borderRotationDegrees = borderRotationDegrees
+            )
+        },
+        track = { state -> LiquidSliderTrack(state, colors) }
     )
 }
 
-private fun ClosedFloatingPointRange<Float>.fractionFor(value: Float): Float {
-    val span = endInclusive - start
-    if (span == 0f) return 0f
-    return ((value - start) / span).coerceIn(0f, 1f)
+private fun snapLiquidSliderValue(value: Float, range: ClosedFloatingPointRange<Float>, steps: Int): Float {
+    val clamped = value.coerceIn(range)
+    val span = range.endInclusive - range.start
+    if (steps == 0 || span <= 0f) return clamped
+    val intervals = steps + 1
+    val fraction = ((clamped - range.start) / span).coerceIn(0f, 1f)
+    val step = (fraction * intervals).roundToInt()
+    return lerp(range.start, range.endInclusive, step / intervals.toFloat()).coerceIn(range)
 }
 
-private fun ClosedFloatingPointRange<Float>.valueFor(
-    x: Float,
-    widthPx: Int,
-    thumbSizePx: Float,
-    steps: Int
-): Float {
-    val travelPx = (widthPx - thumbSizePx).coerceAtLeast(1f)
-    val rawFraction = ((x - thumbSizePx / 2f) / travelPx).coerceIn(0f, 1f)
-    val fraction = if (steps > 0) {
-        val intervals = steps + 1
-        (rawFraction * intervals).roundToInt() / intervals.toFloat()
-    } else {
-        rawFraction
+private class LiquidSliderInteractionSource(
+    private val delegate: MutableInteractionSource = MutableInteractionSource()
+) : MutableInteractionSource by delegate {
+    private var dragCanceled = false
+
+    override suspend fun emit(interaction: Interaction) {
+        record(interaction)
+        delegate.emit(interaction)
     }
-    return start + (endInclusive - start) * fraction
+
+    override fun tryEmit(interaction: Interaction): Boolean {
+        record(interaction)
+        return delegate.tryEmit(interaction)
+    }
+
+    private fun record(interaction: Interaction) {
+        when (interaction) {
+            is DragInteraction.Cancel -> dragCanceled = true
+            is DragInteraction.Start, is DragInteraction.Stop -> dragCanceled = false
+        }
+    }
+
+    fun consumeDragCancellation(): Boolean = dragCanceled.also { dragCanceled = false }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LiquidSliderTrack(state: SliderState, colors: LiquidComponentColors) {
+    Box(Modifier.fillMaxWidth().height(8.dp).drawWithCache {
+        val radius = CornerRadius(size.height / 2f)
+        val stroke = Stroke(1.dp.toPx())
+        onDrawBehind {
+            val fraction = state.coercedValueAsFraction
+            val filledWidth = size.width * fraction
+            drawRoundRect(Color.Black.copy(alpha = 0.18f), cornerRadius = radius)
+            drawRoundRect(colors.content.copy(alpha = colors.content.alpha * 0.10f), cornerRadius = radius)
+            if (filledWidth > 0f) {
+                drawRoundRect(
+                    colors.glow,
+                    topLeft = Offset(if (layoutDirection == LayoutDirection.Rtl) size.width - filledWidth else 0f, 0f),
+                    size = Size(filledWidth, size.height),
+                    cornerRadius = radius
+                )
+            }
+            drawRoundRect(colors.border.copy(alpha = colors.border.alpha * 0.55f), cornerRadius = radius, style = stroke)
+        }
+    })
 }
 
 @Preview(
@@ -240,7 +202,7 @@ private fun ClosedFloatingPointRange<Float>.valueFor(
 @Composable
 fun LiquidSliderPreview() {
     LiquidPreviewScene {
-        var value by remember { mutableStateOf(0.62f) }
+        var value by remember { mutableFloatStateOf(0.62f) }
         LiquidSlider(
             value = value,
             onValueChange = { value = it },

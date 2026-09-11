@@ -39,7 +39,8 @@ internal object HardwareBackdropCapture : BackdropCaptureBackend {
     override fun onHardwareLayerRecorded(
         state: BackdropState,
         layer: GraphicsLayer,
-        captureSize: IntSize
+        captureSize: IntSize,
+        bitmapLease: BackdropBitmapLease?
     ) {
         val session = state.beginHardwareCapture(captureSize)
         try {

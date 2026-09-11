@@ -1,14 +1,15 @@
 package com.builditcode.glass
 
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -17,7 +18,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.sp
  * @param blurRadiusIntensity Blur amount used when [layerName] enables backdrop capture.
  * @param borderRotationDegrees Additional rotation for the border highlight.
  * @param interactionSource Source used to observe pressed state.
+ * @param showBorder Whether to draw the decorative glass rim.
  */
 @Composable
 fun LiquidButton(
@@ -54,7 +55,8 @@ fun LiquidButton(
     colors: LiquidComponentColors = LiquidComponentColors(),
     blurRadiusIntensity: Float = 4f,
     borderRotationDegrees: Float = 0f,
-    interactionSource: MutableInteractionSource = remember { MutableInteractionSource() }
+    interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
+    showBorder: Boolean = true
 ) {
     LiquidButton(
         onClick = onClick,
@@ -65,12 +67,14 @@ fun LiquidButton(
         colors = colors,
         blurRadiusIntensity = blurRadiusIntensity,
         borderRotationDegrees = borderRotationDegrees,
-        interactionSource = interactionSource
+        interactionSource = interactionSource,
+        showBorder = showBorder
     ) {
         Text(
             text = text,
             color = colors.content,
             fontSize = 15.sp,
+            lineHeight = 20.sp,
             fontWeight = FontWeight.SemiBold
         )
     }
@@ -96,7 +100,7 @@ fun LiquidButtonPreview() {
 /**
  * A liquid glass button with custom row content.
  *
- * Content is centered in a horizontal row and receives the same spring press, shape morph,
+ * Content is centered in a horizontal row and receives the same spring press,
  * brightness, optional backdrop capture, and optional border rotation behavior as the text
  * overload.
  *
@@ -126,12 +130,8 @@ fun LiquidButton(
     content: @Composable RowScope.() -> Unit
 ) {
     val pressed by interactionSource.collectIsPressedAsState()
-    val visuals = rememberLiquidInteractionVisuals(active = pressed)
-    val buttonHeight by animateDpAsState(
-        targetValue = if (pressed) 49.dp else 48.dp,
-        animationSpec = liquidDpSpring(),
-        label = "liquid-button-height"
-    )
+    val focused by interactionSource.collectIsFocusedAsState()
+    val visuals = rememberLiquidInteractionState(pressed && enabled, focused && enabled)
     val filter = remember(shape, colors.tint, blurRadiusIntensity) {
         BackdropFilter.Glass(
             blurRadiusIntensity = blurRadiusIntensity,
@@ -142,9 +142,7 @@ fun LiquidButton(
 
     LiquidSurface(
         modifier = modifier
-            .height(buttonHeight)
-            .liquidAsymmetricPress(visuals)
-            .clip(shape)
+            .heightIn(min = 52.dp)
             .clickable(
                 enabled = enabled,
                 interactionSource = interactionSource,
@@ -165,8 +163,7 @@ fun LiquidButton(
             modifier = Modifier
                 .align(Alignment.Center)
                 .fillMaxWidth()
-                .height(34.dp)
-                .padding(horizontal = 22.dp),
+                .padding(horizontal = 22.dp, vertical = 14.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
             content = content

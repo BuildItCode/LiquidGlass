@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -27,7 +28,7 @@ fun LiquidControlsPreview() {
     LiquidPreviewScene {
         var search by remember { mutableStateOf("") }
         var toggle by remember { mutableStateOf(true) }
-        var slider by remember { mutableStateOf(0.62f) }
+        var slider by remember { mutableFloatStateOf(0.62f) }
 
         Column(
             modifier = Modifier.width(320.dp),

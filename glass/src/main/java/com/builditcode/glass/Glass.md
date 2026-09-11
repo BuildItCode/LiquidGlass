@@ -9,11 +9,21 @@ The system has two sides:
 - **Source** - a `Modifier.Node` that records the pixels that glass surfaces are allowed to sample.
 - **Capture** - a `Modifier.Node` that crops the current source capture to its on-screen region, keeps that crop up to date as the source or capture node moves, and applies blur or glass through the best available path for the current API level.
 
-Both modifiers are implemented as `Modifier.Node` (no recomposition overhead). Recapture is driven implicitly by the draw phase: any time a source's `draw()` is re-invoked (e.g. its child content scrolls or animates), the source queues a fresh capture after the manager's debounce interval.
+Both modifiers are implemented as `Modifier.Node` (no recomposition overhead). Sources retain their drawing commands independently of unrelated overlays. The live GPU path publishes changed content in its draw frame; the manager's debounce interval applies only to CPU/bitmap snapshots.
 
 Multiple named layers can coexist. A foreground card can sample a `"Background"` layer, and an overlay sheet can sample a `"Foreground"` layer that contains the background plus non-glass foreground UI.
 
 Glass surfaces can be captured by higher source layers, so blur-over-blur and glass-over-glass layouts are supported. The only blocked case is true same-source feedback, where a capture tries to sample the source currently recording itself.
+
+For a chain such as bottom → middle → top, the middle source must wrap its bottom-capture modifier so the top receives the middle's rendered glass effect. With modifiers on one component, put the source first:
+
+```kotlin
+Modifier
+    .layeredBackdropSource("middle")
+    .layeredBackdropCapture("bottom", filter = BackdropFilter.Glass())
+```
+
+The top then uses `layeredBackdropCapture("middle")`. `TriLevelLayout` and `QuadLevelLayout` already arrange the source wrappers this way. Every level applies its own filter to the rendered pixels beneath it.
 
 `TriLevelLayout` exposes its built-in names through `TrilevelLayers`: `Background`, `Foreground`, and `Overlay`. `QuadLevelLayout` exposes `QuadLevelLayers`: `Background`, `Midground`, `Foreground`, and `Overlay`.
 
@@ -23,6 +33,12 @@ Glass surfaces can be captured by higher source layers, so blur-over-blur and gl
 |-----------|--------------|-------------|
 | API 33+ | Retained `GraphicsLayer` source capture kept on the GPU. | Platform `RenderEffect` blur and AGSL Glass shader. |
 | API 24-32 | Downscaled `Picture` bitmap capture for software-renderable content; automatic hardware snapshot fallback when software capture cannot draw the source. | CPU blur plus CPU refraction/edge/tint fallback for Glass. |
+
+### GPU glass optics
+
+On API 33+, `Glass` uses a smooth optical bevel around the supplied shape, with gentle lensing in the interior. The bevel normal stays continuous even at square corners, avoiding diagonal creases. `refraction` controls the bevel depth and lens strength; `dispersion` separates colors along the bending rim while keeping the flat interior clear; `edge` adds a stronger upper-left reflection and a softer opposing reflection. Tint and lighting preserve the source's transparency, and tint colors are converted into the rendering color space.
+
+The shader samples the backdrop once in the flat interior and three times in the dispersive rim. Size-dependent optical constants are cached per capture node, and unchanged frames reuse their shader effects. Blur radius, capture resolution, and the CPU fallback remain independent of these optical changes. The visual direction follows the lensing and directional-light cues described in [Apple's Liquid Glass overview](https://developer.apple.com/videos/play/wwdc2025/219/); this is an approximation, not Apple's material implementation.
 
 ---
 
@@ -57,7 +73,7 @@ Box(
 }
 ```
 
-Recapture is driven by Compose's draw phase: any redraw of the source subtree (a scrolling `LazyColumn`, an animating child, a state change) re-runs the source's `draw()`, which queues a fresh capture after the manager's debounce interval. You don't need to pass `LazyListState` or any explicit triggers. If the pixels under the source change, a recapture is queued.
+Recapture is driven by Compose's draw phase. Live GPU sources update when their content draws, and retained child-layer animations propagate through the GPU tree. Each source exposes a stable layer reference so updates can pass through stacked glass without waiting for snapshot notifications at each level. Moving a capture region updates only that region's crop. CPU/bitmap snapshots continue to respect the manager's debounce interval. You don't need to pass `LazyListState` or explicit scroll triggers.
 
 If the source contains hardware-backed content such as a Compose image decoded with a hardware bitmap, it is supported automatically. API 33+ keeps the source capture as a GPU layer. API 24-32 starts with the lower-overhead software bitmap path and promotes to a hardware snapshot only when Android reports that the content cannot be drawn into a software canvas.
 
@@ -376,7 +392,7 @@ Keep the returned handle and call `remove()` when the surface closes or the owne
 
 ## Liquid Components
 
-The library includes ready-made glass controls that share the same interaction behavior: a small spring scale, slight bounce, and brightness lift while pressed or dragged.
+The library includes ready-made glass controls with restrained spring feedback and a brightness lift while pressed. Press motion is read during drawing and layer updates, keeping layout bounds and capture shapes stable. Slider positions follow the finger directly, while handle stretch uses a spring; RTL, keyboard, and accessibility input are supported. Switches keep a 48 dp touch target around their compact track. Buttons and search fields grow to accommodate larger text.
 
 ```kotlin
 LiquidSearchBar(
@@ -408,7 +424,7 @@ LiquidCard(
 }
 ```
 
-By default these controls render without backdrop capture, which makes them usable in previews, dialogs, and ordinary Compose layouts. Pass `layerName = QuadLevelLayers.Background` or another source layer when the control is inside a layered glass scene and should sample live content behind it. Each component accepts `blurRadiusIntensity` for the glass blur strength and `borderRotationDegrees` for rim rotation; pass `rememberGlassBorderGyroscopeRotation()` when you want the rim highlight to react to device motion. `LiquidButton` and `LiquidCard` also have slot content for custom layouts.
+By default these controls render without backdrop capture, which makes them usable in previews, dialogs, and ordinary Compose layouts. Pass `layerName = QuadLevelLayers.Background` or another source layer when the control is inside a layered glass scene and should sample live content behind it. Search fields expose `onSearch` for the keyboard search action and `clearButtonContentDescription` for a localized clear-action label. Shared surfaces supply `LocalContentColor` to custom content, and border colors preserve their supplied alpha. Each component accepts `blurRadiusIntensity` for the glass blur strength and `borderRotationDegrees` for rim rotation; pass `rememberGlassBorderGyroscopeRotation()` when you want the rim highlight to react to device motion. `LiquidButton` and `LiquidCard` also have slot content for custom layouts.
 
 ---
 
@@ -436,14 +452,19 @@ While `shouldUpdate` is `false`, source nodes skip snapshot recording. Capture n
 ## Performance Notes
 
 - **Scale factor**: The single biggest lever. `0.4f` (default) gives a good blur with ~6× fewer pixels to process than full resolution. Drop to `0.3f` for more aggressive savings on heavy scenes.
-- **Debounce**: `32ms` is the manager default (~30 fps). Drop to `16ms` for 60 fps recapture if the background animates continuously, or raise it if the background changes rarely.
+- **Debounce**: `rememberBackdropManager` defaults to `16ms`; the layout/scaffold helpers default to `32ms`. This controls source recapture cadence, not the display refresh rate.
 - **API 33+ capture**: Sources are recorded into retained GPU `GraphicsLayer`s, then filtered with platform blur and AGSL. This avoids CPU bitmap copies for hardware-backed images and videos.
 - **API 24-32 fallback**: Software-renderable layers use the lower-overhead `Picture` bitmap path with bitmap reuse. If the source contains hardware-backed content, the layer promotes to a hardware snapshot and then uses the same legacy bitmap effect path.
 - **Hardware acceleration opt-out**: Pass `disableHardwareAcceleration = true` to `rememberBackdropManager`, `TriLevelLayout`, `QuadLevelLayout`, or `rememberLiquidScaffoldState` to keep source capture on the software path. Hardware-backed source content may be unavailable when this is disabled.
 - **Legacy effects**: `BackdropFilter.Blur` and `BackdropFilter.Glass` both use CPU processing on API 24-32. Legacy Glass keeps blur, refraction, edge distortion, and tint, but dispersion is AGSL-only.
 - **Source scope**: Keep the source subtree scoped to the pixels that glass panels actually need. Capturing an entire launcher page at high scale during continuous animation is still real work, even on API 33+.
-- **Shader compilation**: `BackdropFilter.Glass` compiles its AGSL shader lazily on first draw and caches it on the filter instance. Prefer stable remembered filter instances when parameters are not changing.
-- **`autoInvalidateOnMove`**: When a glass capture node moves on screen, it invalidates *other* layers (excluding its own) so layered sources stay in sync during drag. Disable it if you have many capture nodes that move independently and you do not need other layers to track them.
+- **Shader compilation**: Each capture node compiles and caches its own AGSL shader. Filters are immutable specifications and can be shared. Effects are reused until their uniforms or blur radius change; the underlying blur effect is also reused while shape, size, or tint animates.
+- **Shared sources**: Components share one source master. Capture requests are coalesced, and a new component can use the existing master and prepared blur level. Independent managers may reuse layer names without interfering with each other.
+- **Stacked captures**: Recording an upper source replays lower content using its existing captures, without triggering another capture at each lower level. A three-source chain draws the base content once visibly and once for each source recording. Software bitmaps referenced by upper recordings remain alive until those recordings and any pending readbacks finish using them.
+- **Animated software backgrounds**: Blur runs once per distinct radius; region crops and glass refraction are prepared on the background capture worker. Publication reuses those prepared bitmaps. A component that moves or changes its filter during processing may need a transitional draw-time effect.
+- **CPU allocations**: Each source reuses stack-blur and glass-refraction scratch arrays across frames and regions. Concurrent or cancelled workers serialize access to those arrays. Per-node transitional caches release their scratch storage when a prepared result arrives. Capture resolution, blur kernels, refraction, and sampling quality are preserved.
+- **Inactive regions**: Components entirely outside the source request no blur levels. Automatic software recaptures stop when no component intersects the source and resume when one returns. Explicit manager invalidation can still prime an empty source.
+- **`autoInvalidateOnMove`**: Moving a capture region normally reuses the full-source master and updates only that region's crop. Fractional movement reuses the bitmap when the sampled pixels are unchanged. A new source capture is requested when the current master cannot satisfy the region.
 - **Overscroll**: Disable the stretch/glow overscroll effect when using glass over a `LazyColumn` to avoid visual artifacts: wrap the list in `CompositionLocalProvider(LocalOverscrollFactory provides null)`.
 - **Drag state**: Use `mutableFloatStateOf` for drag offsets (`offsetX`, `offsetY`) to avoid boxing `Float` on every pointer event.
 - **Modal overlays**: Put modal glass in a later overlay layer that samples the source beneath it. Use `manager.stopUpdates()` / `startUpdates()` only when you intentionally want a frozen backdrop.

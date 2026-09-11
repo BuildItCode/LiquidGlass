@@ -68,8 +68,8 @@ fun Modifier.glassBorder(
     val angleToCorner = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
 
     // 2. define "Safe" limits to prevent crashes
-    val halfGap = (gapSize / 2f).coerceIn(0f, 0.4f)
-    val soft = softness.coerceIn(0f, 0.1f)
+    val halfGap = (gapSize / 2f).coerceIn(0f, 0.25f)
+    val soft = softness.coerceIn(0f, minOf(0.1f, 0.25f - halfGap))
 
     // 3. Define the Alpha Stops (Transparent -> Color -> Transparent)
     // This creates gaps at 0.0 (Start/Top-Right) and 0.5 (Opposite/Bottom-Left)
@@ -86,7 +86,7 @@ fun Modifier.glassBorder(
         1.0f       // Gap 1 (Wrap-around)
     )
 
-    val c = borderColor.copy(alpha = 0.9f).toArgb()
+    val c = borderColor.toArgb()
     val t = Color.Transparent.toArgb()
 
     val colors = intArrayOf(
@@ -111,15 +111,16 @@ fun Modifier.glassBorder(
     // Cache outline and stroke width — only recomputed when size/density changes
     val outline = shape.createOutline(size, layoutDirection, this)
     val strokeWidth = borderWidth.toPx()
+    val stroke = Stroke(width = strokeWidth)
 
     onDrawWithContent {
         drawContent() // Draw the child content first
 
         // Draw the Overlay (e.g., a white gloss) if provided
-        overlayBrush?.let { drawRect(brush = it) }
+        overlayBrush?.let { drawOutline(outline = outline, brush = it) }
 
         // Draw the Border on top
-        drawOutline(outline = outline, brush = borderBrush, style = Stroke(width = strokeWidth))
+        drawOutline(outline = outline, brush = borderBrush, style = stroke)
     }
 }
 

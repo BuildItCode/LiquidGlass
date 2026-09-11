@@ -3,12 +3,9 @@ package com.builditcode.glass
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Stable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 
@@ -39,7 +36,6 @@ class LiquidScaffoldState internal constructor(
     val backdropManager: BackdropLayerManager
 ) {
     private val components = mutableStateListOf<LiquidScaffoldComponent>()
-    private var nextComponentId by mutableIntStateOf(0)
 
     /**
      * Add [content] to [layer] and return a handle that removes it.
@@ -51,8 +47,7 @@ class LiquidScaffoldState internal constructor(
         layer: String = QuadLevelLayers.Overlay,
         content: @Composable () -> Unit
     ): LiquidScaffoldComponentHandle {
-        val key = nextComponentId++
-        return addComponent(key = key, layer = layer, content = content)
+        return addComponent(key = Any(), layer = layer, content = content)
     }
 
     /**
@@ -67,8 +62,10 @@ class LiquidScaffoldState internal constructor(
         content: @Composable () -> Unit
     ): LiquidScaffoldComponentHandle {
         removeComponent(key)
-        components += LiquidScaffoldComponent(key = key, layer = layer, content = content)
-        return LiquidScaffoldComponentHandle { removeComponent(key) }
+        val component = LiquidScaffoldComponent(key = key, layer = layer, content = content)
+        components += component
+        // An older owner's disposal must not remove a replacement with the same key.
+        return LiquidScaffoldComponentHandle { components.remove(component) }
     }
 
     fun removeComponent(key: Any) {

@@ -21,14 +21,14 @@ import kotlin.math.roundToInt
  * API 33, or when hardware acceleration is disabled for the backdrop. See
  * [backdropCaptureBackend] / [BackdropState.backend] for selection.
  *
- * Region fallbacks are crops of a master that was already stack-blurred per distinct
- * region radius on [Dispatchers.Default], so steady-state draws are plain bitmap blits
- * with no main-thread blur. The only draw-time CPU work is the transitional case where
- * a region's radius changed after the last capture: an unblurred fallback gets a one-off
- * draw-time blur, and a pre-blurred fallback with a stale radius keeps its previous blur
- * level until the requested recapture lands. When the software picture cannot read a
- * hardware-accelerated source, capture promotes to a hardware-layer snapshot read back to a
- * software bitmap; that readback and the software-config copy both run off the main thread.
+ * The master is stack-blurred once per distinct region radius on [Dispatchers.Default].
+ * Region crops and glass refraction are prepared in that same worker, so steady-state
+ * draws are plain bitmap blits. Movement and filter changes during processing may still
+ * need a transitional draw-time effect. A pre-blurred fallback with a stale radius keeps
+ * its previous blur level until the requested recapture lands. On API 28+, hardware pictures
+ * render and read back on the worker. Sources that cannot use that path promote to a
+ * hardware-layer snapshot; its software copy and filtering run on the worker, while the
+ * platform-dependent snapshot call may execute synchronously on Main.
  */
 internal object SoftwareBackdropCapture : BackdropCaptureBackend {
     override val createsFallbackBitmap: Boolean = true
@@ -42,51 +42,61 @@ internal object SoftwareBackdropCapture : BackdropCaptureBackend {
     override fun onHardwareLayerRecorded(
         state: BackdropState,
         layer: GraphicsLayer,
-        captureSize: IntSize
+        captureSize: IntSize,
+        bitmapLease: BackdropBitmapLease?
     ) {
         val session = state.beginHardwareCapture(captureSize)
-        val blurRadii = state.pendingCpuBlurRadii()
+        val requests = state.snapshotSoftwareRegions()
+        val reference = state.softwareCaptureReference(session, requests)
+        val readbackLease = bitmapLease?.copy()
         state.setHardwareProcessingJob(
             state.captureScope.launch(Dispatchers.Main) {
                 var master: ImageBitmap? = null
-                var blurredMasters: Map<Int, ImageBitmap> = emptyMap()
+                var prepared: PreparedSoftwareCapture? = null
                 var applied = false
+                var unchanged = false
                 try {
                     val snapshot = layer.toImageBitmap()
                     master = snapshot
-                    val prepared = withContext(Dispatchers.Default) {
+                    withContext(Dispatchers.Default) {
                         val software = snapshot.softwareCopyFromHardware()
                         val masterBitmap = if (software != null) {
+                            master = software
                             snapshot.safeRecycle()
                             software
                         } else {
                             snapshot
                         }
-                        masterBitmap to createBlurredMasters(masterBitmap.asAndroidBitmap(), blurRadii)
+                        // Publish ownership before the cancellable return to Main; otherwise
+                        // prompt cancellation can discard the result and leak both allocations.
+                        unchanged = reference?.matches(masterBitmap) == true
+                        if (!unchanged) prepared = state.prepareSoftwareCapture(masterBitmap, requests, session)
                     }
-                    master = prepared.first
-                    blurredMasters = prepared.second
                     if (!isActive) {
-                        master?.safeRecycle()
-                        blurredMasters.values.forEach { it.safeRecycle() }
                         return@launch
                     }
-                    state.applyHardwareImageCapture(prepared.first, prepared.second, session)
+                    reference?.close()
+                    if (unchanged) {
+                        state.completeUnchangedSoftwareCapture(checkNotNull(master), reuse = false)
+                        applied = true
+                        return@launch
+                    }
+                    state.applyHardwareImageCapture(checkNotNull(master), checkNotNull(prepared).blurredMasters, session, prepared)
                     applied = true
                 } catch (e: CancellationException) {
-                    if (!applied) {
-                        master?.safeRecycle()
-                        blurredMasters.values.forEach { it.safeRecycle() }
-                    }
                     throw e
                 } catch (e: Exception) {
+                    state.onHardwareCaptureFailed(e, session)
+                } finally {
                     if (!applied) {
                         master?.safeRecycle()
-                        blurredMasters.values.forEach { it.safeRecycle() }
+                        prepared?.recycle()
                     }
-                    state.onHardwareCaptureFailed(e, session)
                 }
-            }
+            }.also { job -> job.invokeOnCompletion {
+                readbackLease?.close()
+                reference?.close()
+            } }
         )
     }
 
@@ -120,13 +130,19 @@ internal object SoftwareBackdropCapture : BackdropCaptureBackend {
                 size.width.roundToInt().coerceAtLeast(1),
                 size.height.roundToInt().coerceAtLeast(1)
             )
-            val glassBitmap = cpuBlur.glassRefraction(
-                sourceBitmap = bitmap.asAndroidBitmap(),
-                radiusPx = residualRadiusPx,
-                glass = glass,
-                targetSize = targetSize
-            )
-            drawBitmapInCaptureRegion(glassBitmap.asImageBitmap(), result)
+            val prepared = result?.preparedGlassFor(glass, residualRadiusPx)
+            val glassBitmap = if (prepared != null) {
+                cpuBlur.clearResults()
+                prepared
+            } else {
+                cpuBlur.glassRefraction(
+                    sourceBitmap = bitmap.asAndroidBitmap(),
+                    radiusPx = residualRadiusPx,
+                    glass = glass,
+                    targetSize = targetSize
+                ).asImageBitmap()
+            }
+            drawBitmapInCaptureRegion(glassBitmap, result)
         }
         drawRect(glass.tint)
     }

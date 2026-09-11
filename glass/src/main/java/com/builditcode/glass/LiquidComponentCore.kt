@@ -1,6 +1,5 @@
 package com.builditcode.glass
 
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
@@ -11,25 +10,29 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.State
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.runtime.Stable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 
 @Stable
@@ -37,9 +40,20 @@ data class LiquidComponentColors(
     val content: Color = Color.White,
     val secondaryContent: Color = Color.White.copy(alpha = 0.7f),
     val tint: Color = Color.White.copy(alpha = 0.08f),
-    val border: Color = Color(131, 131, 131, 155),
+    val border: Color = Color.White.copy(alpha = 0.38f),
     val glow: Color = Color(3, 169, 244, 155)
 )
+
+/** Animation values are read in drawing/layer blocks, keeping capture geometry stable. */
+@Stable
+internal class LiquidInteractionState(val press: State<Float>, val focus: State<Float>)
+
+@Composable
+internal fun rememberLiquidInteractionState(pressed: Boolean, focused: Boolean = false): LiquidInteractionState {
+    val press = animateFloatAsState(if (pressed) 1f else 0f, liquidSpring(), label = "liquid-press")
+    val focus = animateFloatAsState(if (focused) 1f else 0f, liquidSpring(), label = "liquid-focus")
+    return remember(press, focus) { LiquidInteractionState(press, focus) }
+}
 
 @Composable
 internal fun LiquidSurface(
@@ -48,7 +62,7 @@ internal fun LiquidSurface(
     shape: Shape,
     filter: BackdropFilter.Glass,
     colors: LiquidComponentColors,
-    visuals: LiquidInteractionVisuals,
+    visuals: LiquidInteractionState,
     enabled: Boolean,
     showBorder: Boolean,
     borderRotationDegrees: Float,
@@ -56,59 +70,41 @@ internal fun LiquidSurface(
     softness: Float = 0.06f,
     content: @Composable BoxScope.() -> Unit
 ) {
-    val liquidShape = LiquidMorphShape(
-        baseShape = shape,
-        progress = visuals.shapeMorph
-    )
     var surfaceModifier = modifier.graphicsLayer {
-        scaleX = visuals.scale
-        scaleY = visuals.scale
+        val progress = visuals.press.value.coerceIn(0f, 1f)
+        scaleX = 1f - progress * 0.018f
+        scaleY = 1f - progress * 0.018f
         alpha = if (enabled) 1f else 0.48f
     }
-
     surfaceModifier = if (layerName != null) {
-        surfaceModifier.layeredBackdropCapture(
-            layerName = layerName,
-            shape = liquidShape,
-            filter = filter
-        )
-    } else {
-        surfaceModifier.clip(liquidShape)
-    }
+        surfaceModifier.layeredBackdropCapture(layerName, shape = shape, filter = filter)
+    } else surfaceModifier.clip(shape)
 
-    Box(
-        modifier = surfaceModifier.then(
-            if(showBorder) {
-                Modifier.glassBorder(
-                    shape = liquidShape,
-                    borderColor = colors.border.copy(alpha = 0.7f + visuals.pressProgress * 0.24f),
-                    borderWidth = 1.dp,
-                    gapSize = gapSize,
-                    softness = softness,
-                    rotationDegrees = borderRotationDegrees
-                )
-            } else Modifier
-        ),
-        contentAlignment = Alignment.Center
-    ) {
-        val surfaceFill = Modifier
-            .matchParentSize()
-            .clip(liquidShape)
-        Box(
-            if (layerName == null) {
-                surfaceFill.background(colors.tint)
-            } else {
-                surfaceFill.background(
-                    Brush.verticalGradient(
-                        listOf(
-                            Color.White.copy(alpha = 0.10f + visuals.brightness),
-                            Color.White.copy(alpha = 0.04f + visuals.brightness * 0.42f)
-                        )
-                    )
-                )
-            }
+    if (showBorder) {
+        surfaceModifier = surfaceModifier.glassBorder(
+            shape = shape, borderColor = colors.border, borderWidth = 1.dp,
+            gapSize = gapSize, softness = softness, rotationDegrees = borderRotationDegrees
         )
-        content()
+    }
+    CompositionLocalProvider(LocalContentColor provides colors.content) {
+        Box(
+            modifier = surfaceModifier.drawWithCache {
+                val outline = shape.createOutline(size, layoutDirection, this)
+                val sheen = Brush.verticalGradient(listOf(
+                    Color.White.copy(alpha = 0.09f), Color.White.copy(alpha = 0.015f)
+                ))
+                val focusStroke = Stroke(2.dp.toPx())
+                onDrawWithContent {
+                    if (layerName == null) drawOutline(outline, colors.tint)
+                    drawOutline(outline, sheen)
+                    drawOutline(outline, Color.White, alpha = visuals.press.value.coerceIn(0f, 1f) * 0.08f)
+                    drawContent()
+                    drawOutline(outline, colors.glow, alpha = visuals.focus.value.coerceIn(0f, 1f), style = focusStroke)
+                }
+            },
+            contentAlignment = Alignment.Center,
+            content = content
+        )
     }
 }
 
@@ -127,7 +123,8 @@ internal fun LiquidGlassHandle(
     colors: LiquidComponentColors,
     enabled: Boolean,
     borderRotationDegrees: Float,
-    blurRadiusIntensity: Float = 4f
+    blurRadiusIntensity: Float = 4f,
+    visuals: LiquidInteractionState? = null
 ) {
     val filter = remember(shape, colors.tint, blurRadiusIntensity) {
         BackdropFilter.Glass(
@@ -151,9 +148,17 @@ internal fun LiquidGlassHandle(
     }
 
     Box(
-        modifier = handleModifier.glassBorder(
+        modifier = handleModifier.drawWithCache {
+            val outline = shape.createOutline(size, layoutDirection, this)
+            val stroke = Stroke(2.dp.toPx())
+            onDrawWithContent {
+                drawContent()
+                val focus = visuals?.focus?.value ?: 0f
+                if (focus > 0f) drawOutline(outline, colors.glow, alpha = focus.coerceIn(0f, 1f), style = stroke)
+            }
+        }.glassBorder(
             shape = shape,
-            borderColor = colors.border.copy(alpha = 0.72f),
+            borderColor = colors.border,
             borderWidth = 1.dp,
             gapSize = 0.04f,
             softness = 0.04f,
@@ -170,8 +175,8 @@ internal fun LiquidGlassHandle(
                 handleFill.background(
                     Brush.verticalGradient(
                         listOf(
-                            colors.content.copy(alpha = 0.74f),
-                            colors.content.copy(alpha = 0.46f)
+                            colors.content.copy(alpha = colors.content.alpha * 0.86f),
+                            colors.content.copy(alpha = colors.content.alpha * 0.62f)
                         )
                     )
                 )
@@ -180,35 +185,6 @@ internal fun LiquidGlassHandle(
     }
 }
 
-@Composable
-internal fun rememberLiquidInteractionVisuals(active: Boolean): LiquidInteractionVisuals {
-    val pressProgress by animateFloatAsState(
-        targetValue = if (active) 1f else 0f,
-        animationSpec = liquidSpring(),
-        label = "liquid-press-progress"
-    )
-    val scale by animateFloatAsState(
-        targetValue = if (active) 1.035f else 1f,
-        animationSpec = liquidSpring(),
-        label = "liquid-scale"
-    )
-    val brightness by animateFloatAsState(
-        targetValue = if (active) 0.12f else 0f,
-        animationSpec = liquidSpring(),
-        label = "liquid-brightness"
-    )
-    val shapeMorph by animateFloatAsState(
-        targetValue = if (active) 1f else 0f,
-        animationSpec = liquidSpring(),
-        label = "liquid-shape-morph"
-    )
-    return LiquidInteractionVisuals(
-        pressProgress = pressProgress,
-        scale = scale,
-        brightness = brightness,
-        shapeMorph = shapeMorph
-    )
-}
 
 data class LiquidInteractionVisuals(
     val pressProgress: Float,
@@ -217,7 +193,7 @@ data class LiquidInteractionVisuals(
     val shapeMorph: Float
 )
 
-internal class LiquidMorphShape(
+internal data class LiquidMorphShape(
     private val baseShape: Shape,
     private val progress: Float
 ) : Shape {
@@ -253,13 +229,8 @@ private fun CornerRadius.liquidMorph(delta: Float): CornerRadius =
     )
 
 internal fun liquidSpring() = spring<Float>(
-    dampingRatio = Spring.DampingRatioMediumBouncy,
-    stiffness = Spring.StiffnessMediumLow
-)
-
-internal fun <T> liquidDpSpring() = spring<T>(
-    dampingRatio = Spring.DampingRatioMediumBouncy,
-    stiffness = Spring.StiffnessMediumLow
+    dampingRatio = 0.86f,
+    stiffness = 650f
 )
 
 @Composable

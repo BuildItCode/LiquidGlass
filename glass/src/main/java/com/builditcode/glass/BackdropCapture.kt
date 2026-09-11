@@ -12,24 +12,29 @@
  *   covers the whole source, so movement is a local crop update).
  * - The source recaptures only when its own content invalidates its draw or when a
  *   capture is explicitly requested through [BackdropState.sourceInvalidator].
+ * - Replaying a subtree into an upper source reuses lower captures. It neither starts
+ *   another lower capture nor schedules a refresh just because the subtree was replayed.
  *
  * GPU resources:
  * - Each source owns two ping-pong [GraphicsLayer]s and alternates recordings between
- *   them, so no layer is ever created, released, or re-recorded while the RenderThread
- *   may still reference it as the active master. Layers are released only on node
- *   detach, deferred by two frames via [BackdropState.releaseLayersAfterFrames].
+ *   them behind a stable published layer. Updating that layer's display list uses normal
+ *   RenderNode synchronization and propagates to retained consumers in the same GPU frame.
+ *   Layers are released on node detach/reset, deferred by two frames via
+ *   [BackdropState.releaseLayersAfterFrames].
  * - All shader/effect state is per capture node ([CaptureDrawCache]); [BackdropFilter]
  *   values are pure immutable specs, so sharing one filter instance across nodes is safe.
  *
  * Legacy (< API 33) path:
  * - The scaled master bitmap is stack-blurred once per distinct region blur radius on
- *   [Dispatchers.Default] at capture time; region fallbacks are crops of the pre-blurred
- *   master, so no CPU blur runs on the main thread during steady-state draws. If a
+ *   [Dispatchers.Default] at capture time. Region crops and glass refraction are also
+ *   prepared there, so steady-state draws only draw prepared bitmaps. If a
  *   filter's blur radius changes, a recapture is requested and the previous blur level
  *   is shown until it lands.
  * - Because legacy masters are snapshots (unlike API 33+ layer masters, which reference
  *   the live RenderNode tree), [BackdropState] keeps a debounce-cadence recapture loop
- *   alive while regions exist so backgrounds moving behind static glass stay current.
+ *   alive while regions intersect the source so backgrounds moving behind static glass stay current.
+ * - Recorded upper sources retain any lower software bitmaps they draw. Recycling waits
+ *   for pending Picture jobs, hardware readbacks, and retained source layers to release them.
  */
 package com.builditcode.glass
 
@@ -48,6 +53,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.MonotonicFrameClock
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -57,6 +63,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -71,12 +78,15 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toColorLong
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.draw
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.node.CompositionLocalConsumerModifierNode
@@ -89,6 +99,7 @@ import androidx.compose.ui.node.invalidateDraw
 import androidx.compose.ui.node.observeReads
 import androidx.compose.ui.node.requireGraphicsContext
 import androidx.compose.ui.platform.InspectorInfo
+import androidx.compose.ui.platform.AndroidUiDispatcher
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.Density
@@ -102,10 +113,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -116,7 +130,7 @@ import kotlin.time.Duration.Companion.milliseconds
 // =============================================================================
 
 internal fun Bitmap.safeRecycle() {
-    try { if (!isRecycled) recycle() } catch (_: Exception) {}
+    BackdropBitmapReferences.recycle(this)
 }
 
 internal fun ImageBitmap.safeRecycle() {
@@ -143,16 +157,37 @@ internal fun ImageBitmap.softwareCopyFromHardware(): ImageBitmap? {
  * of hardware-config bitmaps on constrained devices) are skipped rather than failing
  * the capture.
  */
-internal fun createBlurredMasters(master: Bitmap, radii: Set<Int>): Map<Int, ImageBitmap> {
+internal suspend fun createBlurredMasters(
+    master: Bitmap,
+    radii: Set<Int>,
+    workspace: StackBlurWorkspace
+): Map<Int, ImageBitmap> {
     if (radii.isEmpty()) return emptyMap()
     val out = HashMap<Int, ImageBitmap>(radii.size)
-    for (radius in radii) {
-        val blurred = runCatching {
-            applyStackBlur(master.copy(Bitmap.Config.ARGB_8888, true), radius)
-        }.getOrNull() ?: continue
-        out[radius] = blurred.asImageBitmap()
+    try {
+        for (radius in radii) {
+            currentCoroutineContext().ensureActive()
+            var copy: Bitmap? = null
+            try {
+                val bitmap = master.copy(Bitmap.Config.ARGB_8888, true) ?: continue
+                copy = bitmap
+                applyStackBlur(bitmap, radius, workspace)
+                out[radius] = bitmap.asImageBitmap()
+                copy = null // Ownership passes to the returned map.
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                // Keep the other blur levels when this copy cannot be prepared.
+            } finally {
+                copy?.safeRecycle()
+            }
+        }
+        currentCoroutineContext().ensureActive()
+        return out
+    } catch (error: Throwable) {
+        out.values.forEach { it.safeRecycle() }
+        throw error
     }
-    return out
 }
 
 // =============================================================================
@@ -177,7 +212,7 @@ internal fun createBlurredMasters(master: Bitmap, radii: Set<Int>): Map<Int, Ima
  *
  * @param defaultScaleFactor Internal capture resolution scale used by new layer states.
  * Lower values reduce capture/blur cost at the expense of detail.
- * @param defaultDebounceMs Minimum interval between source recaptures for new layer states.
+ * @param defaultDebounceMs Minimum interval between CPU/bitmap snapshots for new layer states. Live GPU captures follow source draws.
  * @param disableHardwareAcceleration When true, source capture stays on the software
  * picture/bitmap path and legacy hardware snapshot promotion is disabled.
  */
@@ -237,7 +272,9 @@ class BackdropLayerManager(
 
     /** Freeze all backdrop captures. Last captured image keeps being used by consumers. */
     fun stopUpdates() {
+        if (!shouldUpdate) return
         shouldUpdate = false
+        states.values.forEach { it.pauseUpdates() }
     }
 
     /** Resume captures and trigger one refresh so every layer catches up. */
@@ -314,7 +351,7 @@ internal interface BackdropCaptureBackend {
     /**
      * True when masters are rasterized snapshots that go stale as source content changes
      * (legacy). [BackdropState] then keeps a debounce-cadence recapture loop alive while
-     * regions exist, since content animating inside its own child layer never
+     * regions intersect the source, since content animating inside its own child layer never
      * re-invalidates the source's draw. False when masters are live [GraphicsLayer]s
      * that reflect content changes without recapturing (API 33+).
      */
@@ -327,7 +364,8 @@ internal interface BackdropCaptureBackend {
     fun onHardwareLayerRecorded(
         state: BackdropState,
         layer: GraphicsLayer,
-        captureSize: IntSize
+        captureSize: IntSize,
+        bitmapLease: BackdropBitmapLease? = null
     )
 
     fun ContentDrawScope.drawCapture(
@@ -340,34 +378,37 @@ internal interface BackdropCaptureBackend {
     )
 }
 
-private val recordingBackdropSources = ThreadLocal<ArrayDeque<String>>()
-private val drawingBackdropSources = ThreadLocal<ArrayDeque<String>>()
+private val recordingBackdropSources = ThreadLocal<ArrayDeque<BackdropState>>()
+private val drawingBackdropSources = ThreadLocal<ArrayDeque<BackdropState>>()
 
-private inline fun <T> recordingBackdropSource(layerName: String, block: () -> T): T {
-    val stack = recordingBackdropSources.get() ?: ArrayDeque<String>().also(recordingBackdropSources::set)
-    stack.addLast(layerName)
+internal inline fun <T> recordingBackdropSource(state: BackdropState, block: () -> T): T =
+    withBackdropSource(recordingBackdropSources, state, block)
+
+internal fun isRecordingBackdropSource(state: BackdropState): Boolean =
+    recordingBackdropSources.get()?.contains(state) == true
+
+// An ancestor has already drawn this subtree normally before replaying it for capture.
+internal fun isReplayingBackdropSource(): Boolean = recordingBackdropSources.get()?.isNotEmpty() == true
+
+internal inline fun <T> drawingBackdropSource(state: BackdropState, block: () -> T): T =
+    withBackdropSource(drawingBackdropSources, state, block)
+
+internal fun isDrawingBackdropSource(state: BackdropState): Boolean =
+    drawingBackdropSources.get()?.contains(state) == true
+
+private inline fun <T> withBackdropSource(
+    context: ThreadLocal<ArrayDeque<BackdropState>>,
+    state: BackdropState,
+    block: () -> T
+): T {
+    val stack = context.get() ?: ArrayDeque<BackdropState>().also(context::set)
+    stack.addLast(state)
     return try {
         block()
     } finally {
         stack.removeLast()
     }
 }
-
-private fun isRecordingBackdropSource(layerName: String): Boolean =
-    recordingBackdropSources.get()?.contains(layerName) == true
-
-private inline fun <T> drawingBackdropSource(layerName: String, block: () -> T): T {
-    val stack = drawingBackdropSources.get() ?: ArrayDeque<String>().also(drawingBackdropSources::set)
-    stack.addLast(layerName)
-    return try {
-        block()
-    } finally {
-        stack.removeLast()
-    }
-}
-
-private fun isDrawingBackdropSource(layerName: String): Boolean =
-    drawingBackdropSources.get()?.contains(layerName) == true
 
 // =============================================================================
 // PUBLIC MODIFIERS
@@ -387,7 +428,9 @@ private fun isDrawingBackdropSource(layerName: String): Boolean =
  * into its own capture and is not supported as live glass.
  */
 fun Modifier.layeredBackdropSource(layerName: String): Modifier =
-    this.then(BackdropSourceElement(layerName))
+    // Isolate the source display list from unrelated parent/overlay draw invalidations.
+    // Auto compositing retains commands without allocating a source-sized texture.
+    this.graphicsLayer().then(BackdropSourceElement(layerName))
 
 /**
  * Applies a backdrop blur/glass effect using the most recent capture from [layerName].
@@ -444,9 +487,9 @@ private data class BackdropSourceElement(
  * Records the source subtree into ping-pong [GraphicsLayer]s (hardware path) or a fresh
  * [Picture] per capture (legacy software path).
  *
- * Ping-pong layers: the master layer referenced by current capture results is never the
- * layer being recorded into, so no layer is mutated or released while the RenderThread
- * may still draw a frame referencing it. Both layers are owned by this node and released
+ * Ping-pong content layers sit behind one stable GPU publication layer, so consumers
+ * retain a live reference across source recordings. RenderNode synchronizes display-list
+ * changes with the RenderThread. All three layers are owned by this node and released
  * (frame-deferred) only on detach/reset.
  *
  * A fresh [Picture] per software capture avoids re-recording a Picture instance that a
@@ -463,20 +506,34 @@ private class BackdropSourceNode(
     private var cachedState: BackdropState? = null
     private var captureLayerA: GraphicsLayer? = null
     private var captureLayerB: GraphicsLayer? = null
+    private var publishedLayer: GraphicsLayer? = null
+    private val captureBitmapLeases = HashMap<GraphicsLayer, BackdropBitmapLease>()
     private var recordIntoA = true
+    private var lastSourceRect = Rect.Zero
+
+    private fun bindState(): BackdropState? {
+        val state = currentValueOf(LocalBackdropLayerManager)?.getState(layerName)
+        if (state !== cachedState) {
+            cachedState?.clearSourceCapture()
+            releaseCaptureLayers()
+            cachedState = state
+            state?.updateSourceRect(lastSourceRect)
+        }
+        return state
+    }
 
     fun updateLayerName(newName: String) {
         if (layerName != newName) {
             cachedState?.clearSourceCapture()
+            releaseCaptureLayers()
             layerName = newName
             cachedState = null
         }
     }
 
     override fun onGloballyPositioned(coordinates: LayoutCoordinates) {
-        val state = cachedState
-            ?: currentValueOf(LocalBackdropLayerManager)?.getState(layerName).also { cachedState = it }
-        state?.updateSourceRect(Rect(coordinates.positionInRoot(), coordinates.size.toSize()))
+        lastSourceRect = Rect(coordinates.positionInRoot(), coordinates.size.toSize())
+        bindState()?.updateSourceRect(lastSourceRect)
     }
 
     override fun onDetach() {
@@ -496,16 +553,18 @@ private class BackdropSourceNode(
     }
 
     override fun ContentDrawScope.draw() {
-        val state = cachedState
+        var observedState: BackdropState? = null
+        observeReads {
+            observedState = bindState()
+            observedState?.sourceInvalidator
+        }
+        val captureState = observedState
 
-        if (state == null) {
+        if (captureState == null) {
             drawContent()
             return
         }
-
-        observeReads {
-            state.sourceInvalidator
-        }
+        val state = captureState
 
         val w = size.width.roundToInt()
         val h = size.height.roundToInt()
@@ -514,48 +573,77 @@ private class BackdropSourceNode(
             try {
                 if (state.backend.usesHardwareLayerForSource(state)) {
                     val outerScope = this
-                    drawingBackdropSource(layerName) {
+                    drawingBackdropSource(state) {
                         drawContent()
                     }
 
                     val layer = nextCaptureLayer()
                     val captureSize = state.scaledSize(w, h)
-                    layer.record(size = captureSize) {
-                        scale(
-                            scaleX = state.captureScaleFactor,
-                            scaleY = state.captureScaleFactor,
-                            pivot = Offset.Zero
-                        ) {
-                            recordingBackdropSource(layerName) {
-                                outerScope.drawContent()
+                    val lease = BackdropBitmapLease()
+                    try {
+                        layer.record(size = captureSize) {
+                            scale(
+                                scaleX = state.captureScaleFactor,
+                                scaleY = state.captureScaleFactor,
+                                pivot = Offset.Zero
+                            ) {
+                                recordingBackdropSource(state) {
+                                    retainingBackdropBitmaps(lease) { outerScope.drawContent() }
+                                }
                             }
                         }
+                    } catch (error: Throwable) {
+                        lease.close()
+                        throw error
                     }
+                    captureBitmapLeases.put(layer, lease)?.let { old ->
+                        if (old.isEmpty) old.close() else state.releaseAfterFrames { old.close() }
+                    }
+                    val output = if (!state.backend.createsFallbackBitmap) {
+                        // Consumers retain this stable indirection. Updating its display list
+                        // makes every level see the new source in the same RenderThread frame,
+                        // without waiting for snapshot invalidation to travel up the chain.
+                        val published = publishedLayer ?: requireGraphicsContext().createGraphicsLayer()
+                            .also { publishedLayer = it }
+                        published.record(size = captureSize) { drawLayer(layer) }
+                        published
+                    } else layer
                     state.backend.onHardwareLayerRecorded(
                         state = state,
-                        layer = layer,
-                        captureSize = captureSize
+                        layer = output,
+                        captureSize = captureSize,
+                        bitmapLease = lease
                     )
                 } else {
-                    drawingBackdropSource(layerName) {
+                    drawingBackdropSource(state) {
                         drawContent()
                     }
                     val picture = Picture()
-                    val canvas = picture.beginRecording(w, h)
-                    val outerScope = this
-                    draw(outerScope, layoutDirection, Canvas(canvas), size) {
-                        recordingBackdropSource(layerName) {
-                            outerScope.drawContent()
+                    val lease = BackdropBitmapLease()
+                    var transferred = false
+                    try {
+                        val canvas = picture.beginRecording(w, h)
+                        val outerScope = this
+                        try {
+                            draw(outerScope, layoutDirection, Canvas(canvas), size) {
+                                recordingBackdropSource(state) {
+                                    retainingBackdropBitmaps(lease) { outerScope.drawContent() }
+                                }
+                            }
+                        } finally {
+                            picture.endRecording()
                         }
+                        state.onPictureRecorded(picture, w, h, lease)
+                        transferred = true
+                    } finally {
+                        if (!transferred) lease.close()
                     }
-                    picture.endRecording()
-                    state.onPictureRecorded(picture, w, h)
                 }
             } catch (e: Exception) {
             }
         } else {
             state.requestCaptureAfterPendingWork()
-            drawContent()
+            drawingBackdropSource(state) { drawContent() }
         }
     }
 
@@ -571,7 +659,10 @@ private class BackdropSourceNode(
     }
 
     private fun releaseCaptureLayers() {
-        val layers = listOfNotNull(captureLayerA, captureLayerB)
+        val layers = listOfNotNull(publishedLayer, captureLayerA, captureLayerB)
+        publishedLayer = null
+        val bitmapLeases = captureBitmapLeases.toMap()
+        captureBitmapLeases.clear()
         captureLayerA = null
         captureLayerB = null
         recordIntoA = true
@@ -579,9 +670,13 @@ private class BackdropSourceNode(
         val graphicsContext = requireGraphicsContext()
         val state = cachedState
         if (state != null) {
-            state.releaseLayersAfterFrames(layers) { graphicsContext.releaseGraphicsLayer(it) }
+            state.releaseLayersAfterFrames(layers) {
+                try { graphicsContext.releaseGraphicsLayer(it) } finally { bitmapLeases[it]?.close() }
+            }
         } else {
-            layers.forEach { graphicsContext.releaseGraphicsLayer(it) }
+            layers.forEach {
+                try { graphicsContext.releaseGraphicsLayer(it) } finally { bitmapLeases[it]?.close() }
+            }
         }
     }
 }
@@ -624,6 +719,22 @@ private class BackdropCaptureNode(
     private var graphicsLayer: GraphicsLayer? = null
     private var lastResult: BackdropState.CaptureResult? = null
     private val drawCache = CaptureDrawCache()
+    private var lastRegionRect: Rect? = null
+    private var cpuGlassParameters = filter.cpuGlassParameters()
+
+    private fun bindState(): BackdropState? {
+        val state = currentValueOf(LocalBackdropLayerManager)?.getState(layerName)
+        if (state !== cachedState) {
+            cachedState?.unregisterRegion(regionId)
+            cachedState = state
+            lastResult = null
+            drawCache.clear()
+            lastRegionRect?.let {
+                state?.registerRegion(regionId, it, currentCpuBlurRadiusPx(), currentCpuGlassParameters())
+            }
+        }
+        return state
+    }
 
     fun update(newName: String, newShape: Shape, newFilter: BackdropFilter, newAutoMove: Boolean) {
         val layerChanged = layerName != newName
@@ -639,9 +750,10 @@ private class BackdropCaptureNode(
         }
         shape = newShape
         filter = newFilter
+        if (filterChanged) cpuGlassParameters = newFilter.cpuGlassParameters()
         autoInvalidateOnMove = newAutoMove
         if (filterChanged && !layerChanged) {
-            cachedState?.updateRegionBlurRadius(regionId, currentCpuBlurRadiusPx())
+            cachedState?.updateRegionFilter(regionId, currentCpuBlurRadiusPx(), currentCpuGlassParameters())
         }
         if (shouldInvalidate) invalidateDraw()
     }
@@ -658,11 +770,10 @@ private class BackdropCaptureNode(
     }
 
     override fun onGloballyPositioned(coordinates: LayoutCoordinates) {
-        val manager = currentValueOf(LocalBackdropLayerManager)
-        val state = cachedState ?: manager?.getState(layerName).also { cachedState = it }
-
         val rect = Rect(coordinates.positionInRoot(), coordinates.size.toSize())
-        state?.registerRegion(regionId, rect, currentCpuBlurRadiusPx())
+        lastRegionRect = rect
+        val state = bindState()
+        state?.registerRegion(regionId, rect, currentCpuBlurRadiusPx(), currentCpuGlassParameters())
 
         if (autoInvalidateOnMove && state != null && state.getResult(regionId) == null) {
             state.requestCapture()
@@ -670,15 +781,19 @@ private class BackdropCaptureNode(
     }
 
     override fun ContentDrawScope.draw() {
-        if (isRecordingBackdropSource(layerName) || isDrawingBackdropSource(layerName)) {
+        var drawingOwnSource = false
+        observeReads {
+            val state = bindState()
+            drawingOwnSource = state != null && (isRecordingBackdropSource(state) || isDrawingBackdropSource(state))
+            if (!drawingOwnSource) {
+                state?.updateRegionFilter(regionId, currentCpuBlurRadiusPx(), currentCpuGlassParameters())
+                state?.structureInvalidator
+                lastResult = state?.getResult(regionId)
+            }
+        }
+        if (drawingOwnSource) {
             drawContent()
             return
-        }
-
-        observeReads {
-            val state = cachedState
-            state?.structureInvalidator
-            lastResult = state?.getResult(regionId)
         }
 
         val result = lastResult
@@ -705,6 +820,7 @@ private class BackdropCaptureNode(
     override fun onReset() {
         cachedState?.unregisterRegion(regionId)
         cachedState = null
+        lastRegionRect = null
         lastResult = null
         drawCache.clear()
     }
@@ -723,6 +839,8 @@ private class BackdropCaptureNode(
         graphicsLayer = null
         drawCache.clear()
         cachedState = null
+        lastRegionRect = null
+        lastResult = null
     }
 
     /**
@@ -735,7 +853,8 @@ private class BackdropCaptureNode(
         return (filter.blurRadiusIntensity * 2f * density).roundToInt()
     }
 
-
+    private fun currentCpuGlassParameters(): CpuGlassParameters? =
+        cpuGlassParameters.takeIf { (cachedState?.backend ?: backdropCaptureBackend).createsFallbackBitmap }
 }
 
 // =============================================================================
@@ -827,6 +946,8 @@ internal class CaptureDrawCache {
     private var cachedEffect: androidx.compose.ui.graphics.RenderEffect? = null
     private var cachedEffectIsGlass = false
     private var cachedEffectBlurPx = -1f
+    private var platformBlurEffect: RenderEffect? = null
+    private var platformBlurRadius = -1f
 
     private var uniformGlass: BackdropFilter.Glass? = null
     private var uniformCornerRadii: GlassCornerRadii? = null
@@ -837,6 +958,7 @@ internal class CaptureDrawCache {
     private var radiiSize = Size.Unspecified
     private var radiiLayoutDirection: LayoutDirection? = null
     private var radiiDensity = -1f
+    private var radiiFontScale = -1f
     private var cachedRadii = GlassCornerRadii.Zero
 
     private var recordedResult: BackdropState.CaptureResult? = null
@@ -871,8 +993,7 @@ internal class CaptureDrawCache {
         if (!cachedEffectIsGlass && cachedEffectBlurPx == blurPx) {
             cachedEffect?.let { return it }
         }
-        val effect = RenderEffect.createBlurEffect(blurPx, blurPx, Shader.TileMode.CLAMP)
-            .asComposeRenderEffect()
+        val effect = platformBlur(blurPx).asComposeRenderEffect()
         cachedEffect = effect
         cachedEffectIsGlass = false
         cachedEffectBlurPx = blurPx
@@ -888,7 +1009,7 @@ internal class CaptureDrawCache {
         val effect = if (blurPx > 0f) {
             RenderEffect.createChainEffect(
                 glassEffect,
-                RenderEffect.createBlurEffect(blurPx, blurPx, Shader.TileMode.CLAMP)
+                platformBlur(blurPx)
             ).asComposeRenderEffect()
         } else {
             glassEffect.asComposeRenderEffect()
@@ -899,6 +1020,15 @@ internal class CaptureDrawCache {
         return effect
     }
 
+    @RequiresApi(Build.VERSION_CODES.S)
+    private fun platformBlur(blurPx: Float): RenderEffect {
+        if (platformBlurRadius == blurPx) platformBlurEffect?.let { return it }
+        return RenderEffect.createBlurEffect(blurPx, blurPx, Shader.TileMode.CLAMP).also {
+            platformBlurEffect = it
+            platformBlurRadius = blurPx
+        }
+    }
+
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     fun applyGlassUniforms(
         glass: BackdropFilter.Glass,
@@ -906,29 +1036,35 @@ internal class CaptureDrawCache {
         h: Float,
         cornerRadii: GlassCornerRadii
     ) {
+        val changed = uniformGlass?.refraction != glass.refraction ||
+            uniformGlass?.dispersion != glass.dispersion || uniformGlass?.edge != glass.edge ||
+            uniformGlass?.tint != glass.tint || uniformCornerRadii != cornerRadii ||
+            uniformW != w || uniformH != h
+        if (!changed) return
+
         val shader = requireGlassShader()
-        if (uniformGlass != glass || uniformCornerRadii != cornerRadii) {
-            shader.setFloatUniform(
-                "cornerRadii",
-                cornerRadii.topLeft,
-                cornerRadii.topRight,
-                cornerRadii.bottomRight,
-                cornerRadii.bottomLeft
-            )
-            shader.setFloatUniform("refraction", glass.refraction)
-            shader.setFloatUniform("dispersion", glass.dispersion)
-            shader.setFloatUniform("edge", glass.edge)
-            shader.setFloatUniform("tint", glass.tint.red, glass.tint.green, glass.tint.blue, glass.tint.alpha)
-            uniformGlass = glass
-            uniformCornerRadii = cornerRadii
-        }
-        if (uniformW != w || uniformH != h) {
-            shader.setFloatUniform("resolution", w, h)
-            shader.setFloatUniform("lensCenter", w / 2f, h / 2f)
-            shader.setFloatUniform("lensSize", w, h)
-            uniformW = w
-            uniformH = h
-        }
+        val halfW = (w * 0.5f).coerceAtLeast(0.5f)
+        val halfH = (h * 0.5f).coerceAtLeast(0.5f)
+        val minExtent = min(halfW, halfH)
+        val refraction = glass.refraction.coerceAtLeast(0f)
+        val dispersion = glass.dispersion.coerceAtLeast(0f)
+        val edge = glass.edge.coerceAtLeast(0f)
+        val bevelWidth = (minExtent * refraction.coerceAtLeast(0.06f)).coerceIn(0.5f, minExtent)
+        shader.setFloatUniform("lens", halfW, halfH, 1f / halfW, 1f / halfH)
+        shader.setFloatUniform("cornerRadii", cornerRadii.topLeft, cornerRadii.topRight,
+            cornerRadii.bottomRight, cornerRadii.bottomLeft)
+        shader.setFloatUniform("optics", bevelWidth, 1f / bevelWidth,
+            minExtent * refraction * 0.6f, minExtent * refraction * 0.12f)
+        shader.setFloatUniform("dispersionPx", dispersion * minExtent * 0.1f)
+        shader.setFloatUniform("edge", edge)
+        shader.setFloatUniform("edgeWidth", min(bevelWidth, 1.5f + edge * 5f))
+        shader.setColorUniform("tint", glass.tint.toColorLong())
+        uniformGlass = glass
+        uniformCornerRadii = cornerRadii
+        uniformW = w
+        uniformH = h
+        // RenderEffect snapshots the shader builder's uniforms at creation time.
+        if (cachedEffectIsGlass) cachedEffect = null
     }
 
     fun cornerRadii(
@@ -941,7 +1077,7 @@ internal class CaptureDrawCache {
             shape == radiiShape &&
             size == radiiSize &&
             layoutDirection == radiiLayoutDirection &&
-            density.density == radiiDensity
+            density.density == radiiDensity && density.fontScale == radiiFontScale
         ) {
             return cachedRadii
         }
@@ -950,6 +1086,7 @@ internal class CaptureDrawCache {
         radiiSize = size
         radiiLayoutDirection = layoutDirection
         radiiDensity = density.density
+        radiiFontScale = density.fontScale
         return cachedRadii
     }
 
@@ -1005,10 +1142,18 @@ class BackdropState internal constructor(
         val fallbackBitmap: ImageBitmap? = null,
         val fallbackBlurRadiusPx: Int = 0,
         val captureScaleFactor: Float
-    )
+    ) {
+        // Set before publication; keeping this out of the public constructor preserves its API.
+        internal var preparedGlass: PreparedGlass? = null
+    }
 
-    private class Region(var rect: Rect, var cpuBlurRadiusPx: Int) {
+    private class Region(var rect: Rect, var cpuBlurRadiusPx: Int, var cpuGlass: CpuGlassParameters?) {
         val result = mutableStateOf<CaptureResult?>(null, neverEqualPolicy())
+        // Bookkeeping can run inside a source draw. Only getResult() should subscribe
+        // a drawing node to region updates; source publication must not observe them.
+        var currentResult: CaptureResult?
+            get() = Snapshot.withoutReadObservation { result.value }
+            set(value) { result.value = value }
     }
 
     private data class CropGeometry(
@@ -1031,6 +1176,7 @@ class BackdropState internal constructor(
     }
 
     private val regions = HashMap<Int, Region>()
+    private var activeRegionCount = 0
 
     internal var sourceInvalidator by mutableLongStateOf(0L)
         private set
@@ -1042,6 +1188,81 @@ class BackdropState internal constructor(
     private var masterLayer: GraphicsLayer? = null
     private var blurredMasters: Map<Int, ImageBitmap> = emptyMap()
     private var reusableBitmap: Bitmap? = null
+    @Volatile
+    private var blurWorkspace = StackBlurWorkspace()
+    @Volatile
+    private var glassWorkspace = CpuGlassWorkspace()
+    private val blurMutex = Mutex()
+    private var hardwarePictureReader: HardwarePictureReader? = null
+
+    internal suspend fun prepareBlurredMasters(master: Bitmap, radii: Set<Int>): Map<Int, ImageBitmap> =
+        blurMutex.withLock {
+            // A cancelled worker may still be finishing a blur when its replacement starts.
+            createBlurredMasters(master, radii, blurWorkspace)
+        }
+
+    internal fun snapshotSoftwareRegions(): List<SoftwareRegionRequest> =
+        regions.mapNotNull { (id, region) ->
+            if (intersectsSource(region.rect)) {
+                SoftwareRegionRequest(id, region.rect, region.cpuBlurRadiusPx, region.cpuGlass)
+            } else null
+        }
+
+    internal fun softwareCaptureReference(
+        session: HardwareCaptureSession,
+        requests: List<SoftwareRegionRequest>
+    ): SoftwareCaptureReference? {
+        val image = masterImage ?: return null
+        if (masterSourceRect != session.sourceRect || masterScaledW != session.scaledW ||
+            masterScaledH != session.scaledH ||
+            requests.any { it.blurRadiusPx > 0 && !blurredMasters.containsKey(it.blurRadiusPx) }
+        ) return null
+        return SoftwareCaptureReference(image)
+    }
+
+    internal fun completeUnchangedSoftwareCapture(captured: ImageBitmap, reuse: Boolean) {
+        // Region movement/filter updates already refresh their crop from the published
+        // master. Identical pixels need neither another blur nor another GPU upload.
+        recycleOrReuseOldMaster(captured, reuse)
+        processingJob = null
+        scheduleFollowUpCapture()
+    }
+
+    internal suspend fun prepareSoftwareCapture(
+        master: ImageBitmap,
+        requests: List<SoftwareRegionRequest>,
+        session: HardwareCaptureSession
+    ): PreparedSoftwareCapture = blurMutex.withLock {
+        val prepared = PreparedSoftwareCapture(createBlurredMasters(
+            master.asAndroidBitmap(),
+            requests.mapNotNullTo(HashSet()) { it.blurRadiusPx.takeIf { radius -> radius > 0 } },
+            blurWorkspace
+        ))
+        // A clear/detach can replace the workspace while this cancelled worker finishes.
+        val workspace = glassWorkspace
+        try {
+            for (request in requests) {
+                currentCoroutineContext().ensureActive()
+                val geometry = cropGeometryForRegion(request.rect, session.sourceRect, session.scaledW, session.scaledH)
+                    ?: continue
+                val result = captureResultForGeometry(
+                    master, null, geometry, request.blurRadiusPx, availableBlurredMasters = prepared.blurredMasters
+                )
+                prepared.regions[request.id] = result
+                val crop = result.fallbackBitmap
+                if (crop != null && request.glass != null &&
+                    (request.blurRadiusPx <= 0 || result.fallbackBlurRadiusPx == request.blurRadiusPx)
+                ) {
+                    result.preparedGlass = workspace.prepare(crop, request.glass)
+                }
+            }
+            currentCoroutineContext().ensureActive()
+            prepared
+        } catch (error: Throwable) {
+            prepared.recycle()
+            throw error
+        }
+    }
 
     private var masterSourceRect: Rect = Rect.Zero
     private var masterScaledW: Int = 0
@@ -1051,6 +1272,7 @@ class BackdropState internal constructor(
     private var useHardwareSnapshot = false
     private var lastCaptureTime = 0L
     private var captureRequested = false
+    private var captureForced = false
 
     private var processingJob: Job? = null
     private var scheduledJob: Job? = null
@@ -1097,7 +1319,7 @@ class BackdropState internal constructor(
     }
 
     val shouldCapture: Boolean
-        get() = (regions.isNotEmpty() || captureRequested)
+        get() = !isReplayingBackdropSource() && (activeRegionCount > 0 || captureForced)
                 && processingJob?.isActive != true
                 && debounced()
                 && isUpdateEnabled()
@@ -1109,65 +1331,116 @@ class BackdropState internal constructor(
     }
 
     internal fun requestCapture(force: Boolean) {
-        if (regions.isEmpty() && !force) return
+        if (!isUpdateEnabled() || (activeRegionCount == 0 && !force)) return
+        captureForced = captureForced || force
+        if (captureRequested) return
         captureRequested = true
         if (isProcessing) return
         invalidateOrSchedule()
     }
 
     internal fun requestCaptureAfterPendingWork() {
-        if (regions.isEmpty() || !isUpdateEnabled() || (debounced() && !isProcessing)) return
+        if (isReplayingBackdropSource()) return
+        if (activeRegionCount == 0 || !isUpdateEnabled() || (debounced() && !isProcessing)) return
         requestCapture()
     }
 
-    internal fun registerRegion(id: Int, rect: Rect, cpuBlurRadiusPx: Int) {
+    internal fun registerRegion(id: Int, rect: Rect, cpuBlurRadiusPx: Int, cpuGlass: CpuGlassParameters? = null) {
         val existing = regions[id]
-        if (existing != null && existing.rect == rect && existing.cpuBlurRadiusPx == cpuBlurRadiusPx) return
+        if (existing != null && existing.rect == rect && existing.cpuBlurRadiusPx == cpuBlurRadiusPx &&
+            existing.cpuGlass == cpuGlass) return
 
         val isNew = existing == null
-        val radiusChanged = existing != null && existing.cpuBlurRadiusPx != cpuBlurRadiusPx
-        val region = existing ?: Region(rect, cpuBlurRadiusPx).also { regions[id] = it }
+        val wasIdle = activeRegionCount == 0
+        val wasActive = existing != null && intersectsSource(existing.rect)
+        val isActive = intersectsSource(rect)
+        val region = existing ?: Region(rect, cpuBlurRadiusPx, cpuGlass).also { regions[id] = it }
         region.rect = rect
         region.cpuBlurRadiusPx = cpuBlurRadiusPx
+        region.cpuGlass = cpuGlass
+        if (wasActive != isActive) activeRegionCount += if (isActive) 1 else -1
 
-        val oldResult = region.result.value
-        val geometry = if (hasMasterCapture) {
-            cropGeometryForRegion(rect, masterSourceRect, masterScaledW, masterScaledH)
+        refreshRegion(region)
+        if (isNew) structureInvalidator++
+        if (activeRegionCount == 0) cancelUnneededCapture()
+        if (isActive && (!hasMasterCapture ||
+            !hasPreparedBlur(cpuBlurRadiusPx) ||
+            (wasIdle && backend.requiresContinuousCapture))
+        ) {
+            requestCapture()
+        }
+    }
+
+    private fun refreshRegion(region: Region) {
+        val oldResult = region.currentResult
+        val geometry = if (hasMasterCapture && intersectsSource(region.rect)) {
+            cropGeometryForRegion(region.rect, masterSourceRect, masterScaledW, masterScaledH)
         } else {
             null
         }
         val newResult = when {
             geometry == null -> null
-            oldResult != null && oldResult.matches(masterImage, masterLayer, geometry) -> oldResult
-            else -> captureResultForGeometry(masterImage, masterLayer, geometry, region.cpuBlurRadiusPx)
+            oldResult != null && oldResult.matches(masterImage, masterLayer, geometry) &&
+                (!backend.createsFallbackBitmap || oldResult.fallbackBlurRadiusPx == region.cpuBlurRadiusPx ||
+                    !hasPreparedBlur(region.cpuBlurRadiusPx)) -> oldResult
+            else -> captureResultForGeometry(masterImage, masterLayer, geometry, region.cpuBlurRadiusPx, oldResult)
         }
         if (newResult !== oldResult) {
-            oldResult?.fallbackBitmap?.safeRecycle()
-            region.result.value = newResult
-        }
-        if (isNew) {
-            structureInvalidator++
-            requestCapture()
-        } else if (radiusChanged) {
-            requestCapture()
+            oldResult?.recycleFallbacks(retained = newResult)
+            region.currentResult = newResult
         }
     }
 
     internal fun updateRegionBlurRadius(id: Int, radiusPx: Int) {
         val region = regions[id] ?: return
-        if (region.cpuBlurRadiusPx == radiusPx) return
-        region.cpuBlurRadiusPx = radiusPx
-        requestCapture()
+        registerRegion(id, region.rect, radiusPx, region.cpuGlass)
+    }
+
+    internal fun updateRegionFilter(id: Int, radiusPx: Int, glass: CpuGlassParameters?) {
+        val region = regions[id] ?: return
+        registerRegion(id, region.rect, radiusPx, glass)
     }
 
     internal fun unregisterRegion(id: Int) {
-        regions.remove(id)?.result?.value?.fallbackBitmap?.safeRecycle()
+        val region = regions.remove(id) ?: return
+        if (intersectsSource(region.rect)) activeRegionCount--
+        region.currentResult?.recycleFallbacks()
+        if (activeRegionCount == 0) cancelUnneededCapture()
     }
 
     internal fun updateSourceRect(rect: Rect) {
         if (sourceRect == rect) return
         sourceRect = rect
+        activeRegionCount = 0
+        regions.values.forEach { region ->
+            if (intersectsSource(region.rect)) {
+                activeRegionCount++
+            } else {
+                region.currentResult?.recycleFallbacks()
+                if (region.currentResult != null) region.currentResult = null
+            }
+        }
+        if (activeRegionCount == 0) cancelUnneededCapture()
         requestCapture()
+    }
+
+    private fun intersectsSource(rect: Rect): Boolean = !rect.intersect(sourceRect).isEmpty
+
+    private fun hasPreparedBlur(radius: Int): Boolean =
+        !backend.createsFallbackBitmap || radius <= 0 || blurredMasters.containsKey(radius)
+
+    private fun cancelUnneededCapture() {
+        if (captureForced) return
+        captureRequested = false
+        scheduledJob?.cancel()
+        scheduledJob = null
+    }
+
+    internal fun pauseUpdates() {
+        captureForced = false
+        cancelUnneededCapture()
+        processingJob?.cancel()
+        processingJob = null
     }
 
     /** Distinct nonzero blur radii currently requested by regions (legacy backend only). */
@@ -1175,7 +1448,7 @@ class BackdropState internal constructor(
         if (!backend.createsFallbackBitmap) return emptySet()
         val radii = HashSet<Int>()
         regions.values.forEach { region ->
-            if (region.cpuBlurRadiusPx > 0) radii.add(region.cpuBlurRadiusPx)
+            if (region.cpuBlurRadiusPx > 0 && intersectsSource(region.rect)) radii.add(region.cpuBlurRadiusPx)
         }
         return radii
     }
@@ -1187,22 +1460,32 @@ class BackdropState internal constructor(
      */
     internal fun releaseLayersAfterFrames(layers: List<GraphicsLayer>, release: (GraphicsLayer) -> Unit) {
         if (layers.isEmpty()) return
-        val job = scope.launch {
+        releaseAfterFrames { layers.forEach { runCatching { release(it) } } }
+    }
+
+    internal fun releaseAfterFrames(release: () -> Unit) {
+        val frameContext = scope.coroutineContext[MonotonicFrameClock]
+            ?.let { Dispatchers.Main.immediate + it }
+            ?: AndroidUiDispatcher.Main
+        val job = scope.launch(frameContext) {
             repeat(2) { withFrameNanos { } }
-            layers.forEach { runCatching { release(it) } }
         }
-        job.invokeOnCompletion { cause ->
-            if (cause != null) {
-                layers.forEach { runCatching { release(it) } }
-            }
-        }
+        job.invokeOnCompletion { release() }
     }
 
     internal fun dispose() {
         processingJob?.cancel()
         scheduledJob?.cancel()
-        regions.values.forEach { it.result.value?.fallbackBitmap?.safeRecycle() }
+        if (Build.VERSION.SDK_INT >= 29) hardwarePictureReader?.retire()
+        hardwarePictureReader = null
+        // Drop retained arrays without mutating storage a cancelled worker may still use.
+        blurWorkspace = StackBlurWorkspace()
+        glassWorkspace = CpuGlassWorkspace()
+        regions.values.forEach { it.currentResult?.recycleFallbacks() }
         regions.clear()
+        activeRegionCount = 0
+        captureRequested = false
+        captureForced = false
         reusableBitmap?.safeRecycle()
         reusableBitmap = null
         masterImage?.safeRecycle()
@@ -1212,71 +1495,99 @@ class BackdropState internal constructor(
         blurredMasters = emptyMap()
     }
 
-    internal fun onPictureRecorded(picture: Picture, width: Int, height: Int) {
+    internal fun onPictureRecorded(picture: Picture, width: Int, height: Int, bitmapLease: BackdropBitmapLease? = null) {
         beginCapture()
 
         val scaledW = (width * scaleFactor).roundToInt().coerceAtLeast(1)
         val scaledH = (height * scaleFactor).roundToInt().coerceAtLeast(1)
         val currentSource = sourceRect
-        val blurRadii = pendingCpuBlurRadii()
-
-        val recyclable = reusableBitmap?.takeIf {
-            !it.isRecycled && it.width == scaledW && it.height == scaledH
-        }
-        if (recyclable != null) {
-            reusableBitmap = null
-        } else {
-            reusableBitmap?.safeRecycle()
-            reusableBitmap = null
-        }
+        val requests = snapshotSoftwareRegions()
+        val session = HardwareCaptureSession(currentSource, scaledW, scaledH)
+        val reference = softwareCaptureReference(session, requests)
 
         processingJob?.cancel()
-        processingJob = scope.launch(Dispatchers.Default) {
-            val master = recyclable?.also { it.eraseColor(0) } ?: createBitmap(scaledW, scaledH)
-            var newBlurredMasters: Map<Int, ImageBitmap> = emptyMap()
+        val pictureReader = if (Build.VERSION.SDK_INT >= 29 && !disableHardwareAcceleration && picture.requiresHardwareAcceleration()) {
+            (hardwarePictureReader ?: HardwarePictureReader().also { hardwarePictureReader = it }).also { it.retain() }
+        } else null
+        processingJob = scope.launch(Dispatchers.Main) {
+            var master: Bitmap? = null
+            var capturedImage: ImageBitmap? = null
+            var prepared: PreparedSoftwareCapture? = null
             var applied = false
+            var unchanged = false
             try {
-                android.graphics.Canvas(master).apply {
-                    scale(scaleFactor, scaleFactor)
-                    drawPicture(picture)
+                // Transfer ownership only after the coroutine has started, so cancellation
+                // before dispatch cannot strand a bitmap outside both the state and the job.
+                master = reusableBitmap
+                reusableBitmap = null
+                if (master?.let { it.isRecycled || it.width != scaledW || it.height != scaledH } == true) {
+                    master?.safeRecycle()
+                    master = null
                 }
-                if (!isActive) { master.safeRecycle(); return@launch }
-
-                newBlurredMasters = createBlurredMasters(master, blurRadii)
-                val masterImg = master.asImageBitmap()
-
-                withContext(Dispatchers.Main) {
-                    applyMasterImage(
-                        masterImg = masterImg,
-                        newBlurredMasters = newBlurredMasters,
-                        currentSource = currentSource,
-                        scaledW = scaledW,
-                        scaledH = scaledH,
-                        reuseOldMaster = true
-                    )
+                withContext(Dispatchers.Default) {
+                    val bitmap = if (Build.VERSION.SDK_INT >= 28 && !disableHardwareAcceleration &&
+                        picture.requiresHardwareAcceleration()) {
+                        // The Picture already owns recorded commands/transforms, so no
+                        // Compose node is touched here. GPU rendering and readback both
+                        // run on the worker; GraphicsLayer.toImageBitmap() blocks Main
+                        // synchronously on these Android versions despite being suspend.
+                        master?.safeRecycle()
+                        master = null
+                        (if (Build.VERSION.SDK_INT >= 29 && pictureReader != null) {
+                            pictureReader.capture(picture, scaledW, scaledH, bitmapLease)
+                        } else Bitmap.createBitmap(picture, scaledW, scaledH, Bitmap.Config.ARGB_8888))
+                            .also { master = it }
+                    } else {
+                        (master?.also { it.eraseColor(0) }
+                            ?: createBitmap(scaledW, scaledH).also { master = it }).also { target ->
+                            android.graphics.Canvas(target).apply {
+                                scale(scaleFactor, scaleFactor)
+                                drawPicture(picture)
+                            }
+                        }
+                    }
+                    val image = bitmap.asImageBitmap().also { capturedImage = it }
+                    unchanged = reference?.matches(image) == true
+                    if (!unchanged) prepared = prepareSoftwareCapture(image, requests, session)
+                }
+                reference?.close()
+                if (unchanged) {
+                    completeUnchangedSoftwareCapture(checkNotNull(capturedImage), reuse = true)
                     applied = true
+                    return@launch
                 }
+                applyMasterImage(
+                    masterImg = checkNotNull(capturedImage),
+                    newBlurredMasters = checkNotNull(prepared).blurredMasters,
+                    currentSource = currentSource,
+                    scaledW = scaledW,
+                    scaledH = scaledH,
+                    reuseOldMaster = true,
+                    prepared = prepared
+                )
+                applied = true
             } catch (e: CancellationException) {
-                if (!applied) {
-                    master.safeRecycle()
-                    newBlurredMasters.values.forEach { it.safeRecycle() }
-                }
                 throw e
             } catch (e: Exception) {
-                master.safeRecycle()
-                newBlurredMasters.values.forEach { it.safeRecycle() }
-                withContext(Dispatchers.Main) {
-                    processingJob = null
-                    if (isHardwareBitmapSoftwareFailure(e) && !disableHardwareAcceleration) {
-                        useHardwareSnapshot = true
-                        lastCaptureTime = 0L
-                        requestCapture()
-                    } else if (!isHardwareBitmapSoftwareFailure(e)) {
-                        scheduleFollowUpCapture()
-                    }
+                processingJob = null
+                if (isHardwareBitmapSoftwareFailure(e) && !disableHardwareAcceleration) {
+                    useHardwareSnapshot = true
+                    lastCaptureTime = 0L
+                    requestCapture()
+                } else if (!isHardwareBitmapSoftwareFailure(e)) {
+                    scheduleFollowUpCapture()
+                }
+            } finally {
+                if (!applied) {
+                    master?.safeRecycle()
+                    prepared?.recycle()
                 }
             }
-        }
+        }.also { job -> job.invokeOnCompletion {
+            bitmapLease?.close()
+            reference?.close()
+            if (Build.VERSION.SDK_INT >= 29) pictureReader?.release()
+        } }
     }
 
     internal fun beginHardwareCapture(captureSize: IntSize): HardwareCaptureSession {
@@ -1294,12 +1605,19 @@ class BackdropState internal constructor(
         scheduledJob = null
         processingJob?.cancel()
         processingJob = null
+        if (Build.VERSION.SDK_INT >= 29) hardwarePictureReader?.retire()
+        hardwarePictureReader = null
+        blurWorkspace = StackBlurWorkspace()
+        glassWorkspace = CpuGlassWorkspace()
         captureRequested = false
+        captureForced = false
+        sourceRect = Rect.Zero
+        activeRegionCount = 0
 
         regions.values.forEach { region ->
-            val result = region.result.value
-            result?.fallbackBitmap?.safeRecycle()
-            if (result != null) region.result.value = null
+            val result = region.currentResult
+            result?.recycleFallbacks()
+            if (result != null) region.currentResult = null
         }
 
         val oldMasterImage = masterImage
@@ -1321,7 +1639,8 @@ class BackdropState internal constructor(
     internal fun applyHardwareImageCapture(
         captured: ImageBitmap,
         newBlurredMasters: Map<Int, ImageBitmap>,
-        session: HardwareCaptureSession
+        session: HardwareCaptureSession,
+        prepared: PreparedSoftwareCapture? = null
     ) {
         applyMasterImage(
             masterImg = captured,
@@ -1329,7 +1648,8 @@ class BackdropState internal constructor(
             currentSource = session.sourceRect,
             scaledW = session.scaledW,
             scaledH = session.scaledH,
-            reuseOldMaster = false
+            reuseOldMaster = false,
+            prepared = prepared
         )
     }
 
@@ -1359,7 +1679,8 @@ class BackdropState internal constructor(
         currentSource: Rect,
         scaledW: Int,
         scaledH: Int,
-        reuseOldMaster: Boolean
+        reuseOldMaster: Boolean,
+        prepared: PreparedSoftwareCapture? = null
     ) {
         val oldMaster = masterImage
         val oldBlurred = blurredMasters
@@ -1370,11 +1691,24 @@ class BackdropState internal constructor(
         masterScaledW = scaledW
         masterScaledH = scaledH
 
-        regions.values.forEach { region ->
-            val newResult = cropForRegion(region, currentSource, masterImg, null, scaledW, scaledH)
-            region.result.value?.fallbackBitmap?.safeRecycle()
-            region.result.value = newResult
+        regions.forEach { (id, region) ->
+            val candidate = prepared?.regions?.remove(id)
+            val geometry = if (intersectsSource(region.rect)) {
+                cropGeometryForRegion(region.rect, currentSource, scaledW, scaledH)
+            } else null
+            val newResult = when {
+                geometry == null -> null
+                candidate != null && candidate.matches(masterImg, null, geometry) &&
+                    candidate.fallbackBlurRadiusPx == (region.cpuBlurRadiusPx.takeIf { newBlurredMasters.containsKey(it) } ?: 0)
+                    -> candidate
+                else -> captureResultForGeometry(masterImg, null, geometry, region.cpuBlurRadiusPx, candidate)
+            }
+            candidate?.recycleFallbacks(retained = newResult)
+            region.currentResult?.recycleFallbacks()
+            region.currentResult = newResult
         }
+        // Consumers can disappear while pixels are being prepared on the worker.
+        prepared?.recycleRegions()
 
         recycleOrReuseOldMaster(oldMaster, reuseOldMaster)
         oldBlurred.values.forEach { it.safeRecycle() }
@@ -1398,11 +1732,9 @@ class BackdropState internal constructor(
         masterScaledW = scaledW
         masterScaledH = scaledH
 
-        regions.values.forEach { region ->
-            val newResult = cropForRegion(region, currentSource, null, layer, scaledW, scaledH)
-            region.result.value?.fallbackBitmap?.safeRecycle()
-            region.result.value = newResult
-        }
+        // A stable source layer already updates the retained GPU tree. Only changed
+        // crop geometry needs a new result and a consumer display-list recording.
+        regions.values.forEach(::refreshRegion)
 
         recycleOrReuseOldMaster(oldMaster, reuseOldMaster = false)
         oldBlurred.values.forEach { it.safeRecycle() }
@@ -1413,6 +1745,7 @@ class BackdropState internal constructor(
 
     private fun beginCapture() {
         captureRequested = false
+        captureForced = false
         lastCaptureTime = SystemClock.uptimeMillis()
         scheduledJob?.cancel()
         scheduledJob = null
@@ -1425,7 +1758,7 @@ class BackdropState internal constructor(
         }
 
         val bitmap = oldMaster.asAndroidBitmap()
-        if (!bitmap.isRecycled && bitmap.isMutable) {
+        if (!bitmap.isRecycled && bitmap.isMutable && !BackdropBitmapReferences.isRetained(bitmap)) {
             reusableBitmap?.takeIf { it !== bitmap }?.safeRecycle()
             reusableBitmap = bitmap
         } else {
@@ -1433,8 +1766,10 @@ class BackdropState internal constructor(
         }
     }
 
+    // A live display list is cheap to publish and must advance with its source draw.
+    // Throttling it to the snapshot cadence drops animation frames through layer chains.
     private fun debounced(): Boolean =
-        (SystemClock.uptimeMillis() - lastCaptureTime) >= debounceMs
+        !backend.requiresContinuousCapture || (SystemClock.uptimeMillis() - lastCaptureTime) >= debounceMs
 
     private fun invalidateOrSchedule() {
         if (debounced()) {
@@ -1452,7 +1787,7 @@ class BackdropState internal constructor(
      * Continues capturing after a capture completes. Explicit requests always win; on
      * snapshot backends ([BackdropCaptureBackend.requiresContinuousCapture]) or
      * software-only capture, the next capture is additionally scheduled at debounce
-     * cadence while regions exist, so a moving background keeps refreshing a static
+     * cadence while regions intersect the source, so a moving background keeps refreshing a static
      * glass component. The loop is
      * self-limiting: it only reschedules from capture completion, and captures only
      * happen during draws, so it idles when no frames are produced and stops while
@@ -1464,12 +1799,12 @@ class BackdropState internal constructor(
             return
         }
         if (!backend.requiresContinuousCapture) return
-        if (regions.isEmpty() || !isUpdateEnabled()) return
+        if (activeRegionCount == 0 || !isUpdateEnabled()) return
         if (scheduledJob?.isActive == true) return
         scheduledJob = scope.launch {
             val remaining = (debounceMs - (SystemClock.uptimeMillis() - lastCaptureTime)).coerceAtLeast(1L)
             delay(remaining.milliseconds)
-            if (regions.isNotEmpty() && isUpdateEnabled()) sourceInvalidator++
+            if (activeRegionCount > 0 && isUpdateEnabled()) sourceInvalidator++
         }
     }
 
@@ -1523,6 +1858,7 @@ class BackdropState internal constructor(
         scaledW: Int,
         scaledH: Int
     ): CaptureResult? {
+        if (!intersectsSource(region.rect)) return null
         val geometry = cropGeometryForRegion(region.rect, source, scaledW, scaledH) ?: return null
         return captureResultForGeometry(masterImage, masterLayer, geometry, region.cpuBlurRadiusPx)
     }
@@ -1531,14 +1867,21 @@ class BackdropState internal constructor(
         masterImage: ImageBitmap?,
         masterLayer: GraphicsLayer?,
         geometry: CropGeometry,
-        regionBlurRadiusPx: Int
+        regionBlurRadiusPx: Int,
+        previous: CaptureResult? = null,
+        availableBlurredMasters: Map<Int, ImageBitmap> = blurredMasters
     ): CaptureResult {
         var fallbackBlurRadiusPx = 0
         val fallback = if (backend.createsFallbackBitmap && masterImage != null) {
-            val cropSource = blurredMasters[regionBlurRadiusPx]
+            val cropSource = availableBlurredMasters[regionBlurRadiusPx]
                 ?.also { fallbackBlurRadiusPx = regionBlurRadiusPx }
                 ?: masterImage
-            cropBitmap(
+            if (previous != null && previous.masterImage === masterImage &&
+                previous.srcOffset == geometry.srcOffset && previous.srcSize == geometry.srcSize &&
+                previous.fallbackBlurRadiusPx == fallbackBlurRadiusPx && previous.fallbackBitmap != null
+            ) {
+                previous.fallbackBitmap
+            } else cropBitmap(
                 cropSource,
                 Rect(
                     geometry.srcOffset.x.toFloat(),
@@ -1560,7 +1903,11 @@ class BackdropState internal constructor(
             fallbackBitmap = fallback,
             fallbackBlurRadiusPx = fallbackBlurRadiusPx,
             captureScaleFactor = scaleFactor
-        )
+        ).also { result ->
+            if (fallback != null && fallback === previous?.fallbackBitmap) {
+                result.preparedGlass = previous.preparedGlass
+            }
+        }
     }
 
     private fun CaptureResult.matches(
@@ -1592,6 +1939,7 @@ internal fun ContentDrawScope.drawBitmapInCaptureRegion(
     bitmap: ImageBitmap,
     result: BackdropState.CaptureResult?
 ) {
+    retainBackdropBitmap(bitmap)
     if (result == null) {
         drawImage(
             image = bitmap,
@@ -1625,12 +1973,12 @@ internal fun ContentDrawScope.drawBitmapInCaptureRegion(
 // =============================================================================
 
 /**
- * Per-node cache for residual draw-time CPU blur and glass refraction on the legacy
- * path. Steady-state blur is pre-applied to master crops at capture time; [blur] only
- * runs for the transitional frame(s) after a radius change, and [glassRefraction] for
- * shape-dependent refraction that cannot be shared across regions.
+ * Per-node cache for transitional draw-time CPU effects on the legacy path. Steady-state
+ * crops and glass refraction are prepared on the capture worker. These caches cover
+ * movement or filter changes that cannot yet use a worker-prepared result.
  */
 internal class CpuBlurCache {
+    private val blurWorkspace = StackBlurWorkspace()
     private var source: Bitmap? = null
     private var radius: Int = 0
     private var result: Bitmap? = null
@@ -1643,6 +1991,7 @@ internal class CpuBlurCache {
     private var glassResult: Bitmap? = null
     private var glassPixels = IntArray(0)
     private var glassOutput = IntArray(0)
+    private val glassMaps = CpuRefractionMapCache(maxPixels = 256 * 1024, maxEntries = 1)
 
     fun blur(sourceBitmap: Bitmap, radiusPx: Int): Bitmap {
         if (radiusPx < 1) {
@@ -1654,7 +2003,7 @@ internal class CpuBlurCache {
             result?.let { if (!it.isRecycled) return it }
         }
 
-        val blurred = applyStackBlur(sourceBitmap.copy(Bitmap.Config.ARGB_8888, true), radiusPx)
+        val blurred = applyStackBlur(sourceBitmap.copy(Bitmap.Config.ARGB_8888, true), radiusPx, blurWorkspace)
         result?.safeRecycle()
         source = sourceBitmap
         radius = radiusPx
@@ -1680,7 +2029,7 @@ internal class CpuBlurCache {
         }
 
         val base = sourceBitmap.copy(Bitmap.Config.ARGB_8888, true)
-        val blurred = if (radius > 0) applyStackBlur(base, radius) else base
+        val blurred = if (radius > 0) applyStackBlur(base, radius, blurWorkspace) else base
         val pixelCount = blurred.width * blurred.height
         if (glassPixels.size < pixelCount) glassPixels = IntArray(pixelCount)
         if (glassOutput.size < pixelCount) glassOutput = IntArray(pixelCount)
@@ -1690,7 +2039,8 @@ internal class CpuBlurCache {
             refraction = glass.refraction,
             edge = glass.edge,
             pixels = glassPixels,
-            output = glassOutput
+            output = glassOutput,
+            maps = glassMaps
         )
 
         glassResult?.safeRecycle()
@@ -1703,7 +2053,8 @@ internal class CpuBlurCache {
         return refracted
     }
 
-    fun clear() {
+    fun clearResults() {
+        if (source == null && glassSource == null) return
         result?.safeRecycle()
         glassResult?.safeRecycle()
         source = null
@@ -1715,8 +2066,14 @@ internal class CpuBlurCache {
         glassEdge = -1f
         glassTargetSize = IntSize.Zero
         glassResult = null
+    }
+
+    fun clear() {
+        clearResults()
+        glassMaps.clear()
         glassPixels = IntArray(0)
         glassOutput = IntArray(0)
+        blurWorkspace.clear()
     }
 }
 
@@ -1741,16 +2098,20 @@ private fun cropBitmap(source: ImageBitmap, rect: Rect): ImageBitmap? {
     val w = r - l; val h = b - t
     if (w <= 0 || h <= 0) return null
 
+    var pending: Bitmap? = null
     return try {
         val out = createBitmap(w, h)
+        pending = out
         android.graphics.Canvas(out).drawBitmap(
             source.asAndroidBitmap(),
             android.graphics.Rect(l, t, r, b),
             android.graphics.Rect(0, 0, w, h),
             bitmapFilterPaint()
         )
-        out.asImageBitmap()
+        out.asImageBitmap().also { pending = null }
     } catch (e: Exception) {
         null
+    } finally {
+        pending?.safeRecycle()
     }
 }
