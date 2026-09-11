@@ -104,7 +104,8 @@ fun LiquidSearchBar(
         layerName = layerName,
         shape = shape,
         filter = filter,
-        colors = colors,
+        // Keep the focus outline consistent with the configured glass border.
+        colors = colors.copy(glow = colors.border),
         visuals = visuals,
         enabled = enabled,
         borderRotationDegrees = borderRotationDegrees,
